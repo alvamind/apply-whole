@@ -50,8 +50,8 @@ describe("Result Formatters", () => {
   
   test("formatWriteResults should format success and failure correctly", () => {
     const writeResults: WriteResult[] = [
-      { filePath: "file1.js", success: true },
-      { filePath: "file2.js", success: false, error: new Error("Write error") },
+      { filePath: "file1.js", success: true, linesAdded: 5, linesDeleted: 2 },
+      { filePath: "file2.js", success: false, error: new Error("Write error"), linesAdded: 0, linesDeleted: 0 },
     ];
     
     const applyResult: ApplyResult = {
@@ -60,6 +60,10 @@ describe("Result Formatters", () => {
         totalAttempted: 2,
         successfulWrites: 1,
         failedWrites: 1,
+        totalLinesAdded: 5,
+        totalLinesDeleted: 2,
+        linesAdded: 5,
+        linesDeleted: 2,
         durationMs: 1500,
       },
     };

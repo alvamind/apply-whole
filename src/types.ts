@@ -1,27 +1,22 @@
 // src/types.ts
-
 import type { ChalkInstance } from "chalk";
-// Remove ParsedResults import
-import type { ParseArgsConfig } from "node:util"; // Keep ParseArgsConfig
+import type { ParseArgsConfig } from "node:util";
 
-// --- Primitive Aliases ---
 export type FilePath = string;
 export type FileContent = string;
 export type ErrorMessage = string;
 export type Milliseconds = number;
-export type Nanoseconds = [number, number]; // From process.hrtime
+export type Nanoseconds = [number, number];
 export type ExitCode = number;
-export type Encoding = "utf-8"; // Or other encodings if needed
+export type Encoding = "utf-8";
 export type LineNumber = number;
 
-// --- Core Data Structures ---
 export interface CodeBlock {
   readonly filePath: FilePath;
   readonly fileContent: FileContent;
   readonly startLineNumber: LineNumber;
 }
 
-// --- Analysis Types ---
 export interface AnalysisIssue {
   readonly lineNumber: LineNumber;
   readonly lineContent: string;
@@ -38,17 +33,11 @@ export interface AnalysisResult {
   readonly issues: ReadonlyArray<AnalysisIssue>;
 }
 
-// --- Command Line Arguments ---
-
-// Define the expected structure returned by parseArgs based on ARGS_CONFIG
 export interface ParsedArgsValues {
   readonly values: {
     readonly input?: string;
     readonly help?: boolean;
-    // Add other potential options here if ARGS_CONFIG changes
   };
-  // Include other properties like 'positionals' if needed, though we avoid them
-  // readonly positionals: readonly string[];
 }
 
 export interface ParsedArgsResult {
@@ -57,19 +46,24 @@ export interface ParsedArgsResult {
   readonly showHelp: boolean;
 }
 
-// --- I/O Results ---
-export interface WriteResult {
+export interface LineChanges {
+    readonly linesAdded: number;
+    readonly linesDeleted: number;
+}
+
+export interface WriteResult extends LineChanges {
   readonly filePath: FilePath;
   readonly success: boolean;
   readonly error?: Error;
 }
 
-// --- Execution Summary ---
-export interface ProcessingStats {
+export interface ProcessingStats extends LineChanges {
   readonly totalAttempted: number;
   readonly successfulWrites: number;
   readonly failedWrites: number;
   readonly durationMs: Milliseconds;
+  readonly totalLinesAdded: number; // Aggregate of linesAdded
+  readonly totalLinesDeleted: number; // Aggregate of linesDeleted
 }
 
 export interface ApplyResult {
@@ -77,24 +71,17 @@ export interface ApplyResult {
   readonly stats: ProcessingStats;
 }
 
-// --- Dependency Injection Interface ---
 export interface Dependencies {
-  // Filesystem & I/O
   readonly readFile: (filePath: FilePath, encoding: Encoding) => Promise<FileContent>;
   readonly writeFile: (filePath: FilePath, content: FileContent, encoding: Encoding) => Promise<void>;
   readonly exists: (path: FilePath) => Promise<boolean>;
   readonly mkdir: (path: FilePath, options: { readonly recursive: boolean }) => Promise<void>;
   readonly dirname: (path: FilePath) => FilePath;
   readonly readClipboard: () => Promise<FileContent>;
-
-  // Console & Process
   readonly log: (message: string) => void;
   readonly error: (message: string) => void;
-  readonly exit: (code: number) => never; // Use number type directly for exit code
-
-  // Utilities
+  readonly exit: (code: number) => never;
   readonly chalk: ChalkInstance;
-  // Use the specific type we defined
   readonly parseArgs: <T extends ParseArgsConfig>(config: T) => ParsedArgsValues;
   readonly hrtime: (time?: Nanoseconds) => Nanoseconds;
 }

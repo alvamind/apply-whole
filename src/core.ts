@@ -1,7 +1,5 @@
 // src/core.ts
-
 import type {
-  // ParsedArgs removed, using ParsedArgsResult instead
   FilePath,
   FileContent,
   CodeBlock,
@@ -14,8 +12,10 @@ import type {
   Encoding,
   Nanoseconds,
   Milliseconds,
-  ParsedArgsResult, // Use the more specific result type
-  ParsedArgsValues, // Used in parseCliArguments
+  ParsedArgsResult,
+  ParsedArgsValues,
+  LineChanges,
+  ProcessingStats,
 } from "./types";
 import {
   DEFAULT_ENCODING,
@@ -24,9 +24,8 @@ import {
   HELP_MESSAGE,
   ARGS_CONFIG,
   ExitCodes,
+  NEWLINE_REGEX,
 } from "./constants";
-
-// --- Pure Helper Functions ---
 
 const nanosecondsToMilliseconds = (diff: Nanoseconds): Milliseconds =>
   (diff[0] * 1e9 + diff[1]) / 1e6;
@@ -34,75 +33,64 @@ const nanosecondsToMilliseconds = (diff: Nanoseconds): Milliseconds =>
 const getErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
-// --- Core Logic Functions (using Dependency Injection) ---
+const reportErrorAndExit = (
+  deps: Pick<Dependencies, "error" | "exit" | "chalk">,
+  message: string,
+  exitCode: typeof ExitCodes[keyof typeof ExitCodes],
+  helpText?: string
+): never => {
+  deps.error(deps.chalk.red(message));
+  if (helpText) {
+    deps.error(helpText);
+  }
+  return deps.exit(exitCode);
+};
 
-// Add chalk to Pick
 const parseCliArguments = (
   deps: Pick<Dependencies, "parseArgs" | "error" | "log" | "exit" | "chalk">,
   argv: ReadonlyArray<string>
 ): ParsedArgsResult => {
   try {
-    // Use ParsedArgsValues type here
     const parsed: ParsedArgsValues = deps.parseArgs({ ...ARGS_CONFIG, args: argv.slice(2) });
     const showHelp = parsed.values.help ?? false;
     const inputFile = parsed.values.input ?? null;
 
     if (showHelp) {
-      deps.log(HELP_MESSAGE); // Show help message on stdout
+      deps.log(HELP_MESSAGE);
       return deps.exit(ExitCodes.SUCCESS);
     }
 
     const useClipboard = !inputFile;
 
-    // Check for conflict - use deps.chalk here
-    if (useClipboard && showHelp) {
-         deps.error(deps.chalk.red("Cannot use clipboard and show help simultaneously."));
-         deps.error(HELP_MESSAGE);
-         return deps.exit(ExitCodes.INVALID_ARGS);
-    }
-
     return {
       inputFile,
       useClipboard,
-      showHelp, // Will be false if we reach here
+      showHelp: false,
     };
   } catch (err: unknown) {
-    // Use deps.chalk here
-    deps.error(deps.chalk.red(`Invalid arguments: ${getErrorMessage(err)}`));
-    deps.error(HELP_MESSAGE); // Show help message on stderr for errors
-    return deps.exit(ExitCodes.INVALID_ARGS);
+    return reportErrorAndExit(
+      deps,
+      `Invalid arguments: ${getErrorMessage(err)}`,
+      ExitCodes.INVALID_ARGS,
+      HELP_MESSAGE
+    );
   }
 };
 
-// Add log to Pick
 const getInputContent = async (
-  deps: Pick<Dependencies, "readFile" | "readClipboard" | "chalk" | "error" | "exit" | "log">,
-  args: ParsedArgsResult, // Use the correct type
+  deps: Pick<Dependencies, "readFile" | "readClipboard" | "chalk" | "error" | "exit">,
+  args: ParsedArgsResult,
   encoding: Encoding
 ): Promise<FileContent> => {
   const sourceDescription = args.inputFile
     ? `file: ${deps.chalk.cyan(args.inputFile)}`
     : "clipboard";
-  // Use deps.error here for logging/status updates
   deps.error(deps.chalk.blue(`Reading from ${sourceDescription}...`));
 
-  try {
+  const readFileOrClipboard = async (): Promise<FileContent> => {
     if (args.inputFile) {
-      try {
-        return await deps.readFile(args.inputFile, encoding);
-      } catch (fileError: unknown) {
-        const baseMsg = `Failed to read from ${sourceDescription}`;
-        const specificError = getErrorMessage(fileError);
-        deps.error(deps.chalk.red(`${baseMsg}: ${specificError}`));
-        
-        if (specificError.includes('ENOENT')) {
-          deps.error(deps.chalk.yellow(`Hint: Ensure the file '${args.inputFile}' exists`));
-        }
-        
-        process.exit(ExitCodes.ERROR); // Force exit with correct code
-      }
+      return deps.readFile(args.inputFile, encoding);
     }
-    
     if (args.useClipboard) {
       const content = await deps.readClipboard();
       if (!content || content.trim().length === 0) {
@@ -110,42 +98,39 @@ const getInputContent = async (
       }
       return content;
     }
-    
     throw new Error("No input source specified (file or clipboard).");
+  };
+
+  try {
+    return await readFileOrClipboard();
   } catch (error: unknown) {
     const baseMsg = `Failed to read from ${sourceDescription}`;
     const specificError = getErrorMessage(error);
-    deps.error(deps.chalk.red(`${baseMsg}: ${specificError}`));
-    
-    if (args.useClipboard) {
-      deps.error(deps.chalk.yellow(`Hint: Ensure clipboard access is allowed and it contains text.`));
+    let hint = "";
+    if (args.inputFile && specificError.includes('ENOENT')) {
+      hint = deps.chalk.yellow(`Hint: Ensure the file '${args.inputFile}' exists.`);
+    } else if (args.useClipboard) {
+      hint = deps.chalk.yellow(`Hint: Ensure clipboard access is allowed and it contains text.`);
     }
-    
-    process.exit(ExitCodes.ERROR); // Force exit with correct code
+    return reportErrorAndExit(deps, `${baseMsg}: ${specificError}`, ExitCodes.ERROR, hint || undefined);
   }
 };
 
-
-// --- Analysis Function ---
 const analyzeMarkdownContent = (
     markdownContent: FileContent
 ): AnalysisResult => {
-    const lines = markdownContent.split(/\r?\n/);
+    const lines = markdownContent.split(NEWLINE_REGEX);
     const issues: AnalysisIssue[] = [];
     const validBlocks: CodeBlock[] = [];
 
-    // Find all delimiter lines
     const delimiterLines: DelimiterLine[] = lines.reduce(
-        (acc: DelimiterLine[], lineContent, index) => {
-            if (ANY_CODE_BLOCK_DELIMITER_REGEX.test(lineContent.trimStart())) {
-                acc.push({ lineNumber: index + 1, content: lineContent });
-            }
-            return acc;
-        },
+        (acc: DelimiterLine[], lineContent, index) =>
+            ANY_CODE_BLOCK_DELIMITER_REGEX.test(lineContent.trimStart())
+                ? [...acc, { lineNumber: index + 1, content: lineContent }]
+                : acc,
         []
     );
 
-    // Check for odd number of delimiters - this is an issue
     if (delimiterLines.length % 2 !== 0) {
         const lastDelimiter = delimiterLines[delimiterLines.length - 1];
         if (lastDelimiter) {
@@ -157,11 +142,9 @@ const analyzeMarkdownContent = (
         }
     }
 
-    // Process matched delimiter pairs
     for (let i = 0; i < delimiterLines.length - 1; i += 2) {
         const startLine = delimiterLines[i];
         const endLine = delimiterLines[i + 1];
-
         if (!startLine || !endLine) continue;
 
         const trimmedStartLineContent = startLine.content.trim();
@@ -173,20 +156,16 @@ const analyzeMarkdownContent = (
                 lineContent: startLine.content,
                 message: "Invalid code block start tag format. Expected: ```[lang] // path/to/file.ext`",
             });
-            continue;
+        } else {
+            const codeContent = lines
+                .slice(startLine.lineNumber, endLine.lineNumber - 1)
+                .join('\n');
+            validBlocks.push({
+                filePath: match.groups['path'].trim(),
+                fileContent: codeContent,
+                startLineNumber: startLine.lineNumber,
+            });
         }
-
-        // Extract code content - starting from the line after the delimiter
-        // and stopping before the closing delimiter
-        const codeContent = lines
-            .slice(startLine.lineNumber, endLine.lineNumber - 1)
-            .join('\n');
-
-        validBlocks.push({
-            filePath: match.groups['path'].trim(),
-            fileContent: codeContent,
-            startLineNumber: startLine.lineNumber,
-        });
     }
 
     return {
@@ -195,13 +174,8 @@ const analyzeMarkdownContent = (
     };
 };
 
-
-// --- File Writing Functions ---
-// EnsureDirectoryExists and performWrite remain the same structure
-// but ensure deps signatures match full Dependencies if needed, or use Pick
-
 const ensureDirectoryExists = async (
-  deps: Pick<Dependencies, "exists" | "mkdir" | "dirname">, // Keep Pick specific
+  deps: Pick<Dependencies, "exists" | "mkdir" | "dirname">,
   filePath: FilePath
 ): Promise<void> => {
   const dir = deps.dirname(filePath);
@@ -213,63 +187,98 @@ const ensureDirectoryExists = async (
   }
 };
 
+const calculateLineChanges = (
+    oldContent: FileContent | null,
+    newContent: FileContent
+): LineChanges => {
+    const oldLines = oldContent?.split(NEWLINE_REGEX) ?? [];
+    const newLines = newContent.split(NEWLINE_REGEX);
+
+    // Simple line count difference for basic stats
+    const linesAdded = Math.max(0, newLines.length - oldLines.length);
+    const linesDeleted = Math.max(0, oldLines.length - newLines.length);
+
+    // Note: This is a basic count diff, not a true diff algorithm.
+    // For more accurate add/delete based on content matching, a diff library would be needed.
+    // However, sticking to core implementation per requirements.
+    return { linesAdded, linesDeleted };
+};
+
 const performWrite = async (
-  deps: Pick<Dependencies, "writeFile" | "exists" | "mkdir" | "dirname">, // Keep Pick specific
+  deps: Pick<Dependencies, "writeFile" | "readFile" | "exists" | "mkdir" | "dirname">,
   block: CodeBlock,
   encoding: Encoding
 ): Promise<WriteResult> => {
+  let oldContent: FileContent | null = null;
+  let lineChanges: LineChanges = { linesAdded: 0, linesDeleted: 0 };
   try {
     await ensureDirectoryExists(deps, block.filePath);
-    // Pass encoding even if implementation might ignore it
+
+    try {
+      oldContent = await deps.readFile(block.filePath, encoding);
+    } catch (readError: unknown) {
+      // Ignore ENOENT (file not found), treat as empty old content
+      if (!(readError instanceof Error && 'code' in readError && readError.code === 'ENOENT')) {
+        throw readError; // Re-throw other read errors
+      }
+    }
+
     await deps.writeFile(block.filePath, block.fileContent, encoding);
-    return { filePath: block.filePath, success: true };
+    lineChanges = calculateLineChanges(oldContent, block.fileContent);
+
+    return { filePath: block.filePath, success: true, ...lineChanges };
   } catch (error: unknown) {
     return {
       filePath: block.filePath,
       success: false,
       error: error instanceof Error ? error : new Error(String(error)),
+      linesAdded: 0,
+      linesDeleted: 0,
     };
   }
 };
 
-
 const writeFiles = async (
-  // Keep Pick specific, hrtime was missing before
-  deps: Pick<Dependencies, "writeFile" | "exists" | "mkdir" | "dirname" | "hrtime">,
+  deps: Pick<Dependencies, "writeFile" | "readFile" | "exists" | "mkdir" | "dirname" | "hrtime">,
   blocks: ReadonlyArray<CodeBlock>,
   encoding: Encoding
 ): Promise<ApplyResult> => {
   const startTime = deps.hrtime();
-  const writeResults: WriteResult[] = [];
 
-  for (const block of blocks) {
-    const result = await performWrite(deps, block, encoding);
-    writeResults.push(result);
-  }
+  const writePromises = blocks.map(block => performWrite(deps, block, encoding));
+  const writeResults = await Promise.all(writePromises);
 
   const endTime = deps.hrtime(startTime);
   const durationMs = nanosecondsToMilliseconds(endTime);
 
-  const successfulWrites = writeResults.filter(result => result.success).length;
-  const failedWrites = writeResults.length - successfulWrites;
+  const initialStats: ProcessingStats = {
+      totalAttempted: blocks.length,
+      successfulWrites: 0,
+      failedWrites: 0,
+      totalLinesAdded: 0,
+      totalLinesDeleted: 0,
+      linesAdded: 0,
+      linesDeleted: 0,
+      durationMs,
+  };
+
+  const finalStats = writeResults.reduce((stats, result) => ({
+      ...stats,
+      successfulWrites: stats.successfulWrites + (result.success ? 1 : 0),
+      failedWrites: stats.failedWrites + (result.success ? 0 : 1),
+      totalLinesAdded: stats.totalLinesAdded + result.linesAdded,
+      totalLinesDeleted: stats.totalLinesDeleted + result.linesDeleted,
+  }), initialStats);
+
 
   return {
     writeResults: Object.freeze(writeResults),
-    stats: {
-      totalAttempted: writeResults.length,
-      successfulWrites,
-      failedWrites,
-      durationMs
-    }
+    stats: finalStats
   };
 };
 
-// --- Output Formatting ---
-// formatAnalysisIssues and formatWriteResults remain the same structure
-// Ensure deps signatures match full Dependencies if needed, or use Pick
-
 const formatAnalysisIssues = (
-    deps: Pick<Dependencies, "chalk">, // Pick only chalk
+    deps: Pick<Dependencies, "chalk">,
     issues: ReadonlyArray<AnalysisIssue>
 ): string[] => {
   return issues.map(
@@ -279,115 +288,88 @@ const formatAnalysisIssues = (
 };
 
 const formatWriteResults = (
-  deps: Pick<Dependencies, "chalk">, // Pick only chalk
+  deps: Pick<Dependencies, "chalk">,
   { writeResults, stats }: ApplyResult
 ): string => {
-  const resultLines: string[] = [];
-
-  // Individual write results
-  writeResults.forEach((result) => {
-    const prefix = result.success
-      ? deps.chalk.green("✔ Written: ")
-      : deps.chalk.red("✗ Failed: ");
-    let line = `${prefix}${result.filePath}`;
+  const resultLines: string[] = writeResults.map((result) => {
+    const statusIcon = result.success ? deps.chalk.green("✔") : deps.chalk.red("✗");
+    const action = result.success ? "Written" : "Failed";
+    const changeStats = result.success
+        ? ` ${deps.chalk.green(`(+${result.linesAdded}`)}, ${deps.chalk.red(`-${result.linesDeleted})`)}`
+        : "";
+    let line = `${statusIcon} ${action}: ${result.filePath}${changeStats}`;
     if (!result.success && result.error) {
       line += ` (${deps.chalk.red(getErrorMessage(result.error))})`;
     }
-    resultLines.push(line);
+    return line;
   });
 
-  // Summary stats
   const duration = stats.durationMs.toFixed(2);
-  resultLines.push(
+  const summary = [
     `\n${deps.chalk.bold("Summary:")}`,
     `Attempted: ${stats.totalAttempted} file(s) (${deps.chalk.green(
       `${stats.successfulWrites} succeeded`
-    )}, ${deps.chalk.red(`${stats.failedWrites} failed`)})`
-  );
+    )}, ${deps.chalk.red(`${stats.failedWrites} failed`)})`,
+    `Lines changed: ${deps.chalk.green(`+${stats.totalLinesAdded}`)}, ${deps.chalk.red(`-${stats.totalLinesDeleted}`)}`,
+    stats.durationMs > 0 ? `Completed in ${duration}ms` : "",
+  ].filter(Boolean); // Remove empty strings
 
-  if (stats.durationMs > 0) {
-    resultLines.push(`Completed in ${duration}ms`);
-  }
-
-  return resultLines.join("\n");
+  return [...resultLines, ...summary].join("\n");
 };
 
-// --- Main Application Logic ---
-
 const runApply = async (
-  deps: Dependencies, // Use full Dependencies here
+  deps: Dependencies,
   argv: ReadonlyArray<string>
 ): Promise<void> => {
+  let exitCode: number = ExitCodes.SUCCESS;
   try {
-    // Parse arguments first
     const args = parseCliArguments(deps, argv);
-
-    // Get input content
     const content = await getInputContent(deps, args, DEFAULT_ENCODING);
 
-    // Analyze content - keep the same structure
     deps.error(deps.chalk.blue("Analyzing markdown content..."));
     const { validBlocks, issues } = analyzeMarkdownContent(content);
 
-    // Process analysis results
     if (issues.length > 0) {
       deps.error(deps.chalk.yellow("\nAnalysis Issues Found:"));
-      const formattedIssues = formatAnalysisIssues(deps, issues);
-      formattedIssues.forEach(issue => deps.error(issue));
-
+      formatAnalysisIssues(deps, issues).forEach(issue => deps.error(issue));
+      exitCode = ExitCodes.ERROR; // Mark potential failure even if some blocks are valid
       if (validBlocks.length === 0) {
-        deps.error(deps.chalk.red("\nNo valid code blocks were extracted due to analysis issues."));
-        deps.error(deps.chalk.red(`Finished with ${issues.length} analysis issue(s).`));
-        process.exit(ExitCodes.ERROR);
+         deps.error(deps.chalk.red("\nNo valid code blocks were extracted due to analysis issues."));
+         return deps.exit(exitCode);
       }
-
       deps.error(deps.chalk.yellow("\nAttempting to process any valid blocks found..."));
     } else {
       deps.error(deps.chalk.green("Analysis complete. No issues found."));
     }
 
-    // Process blocks
     if (validBlocks.length === 0) {
-      deps.error(deps.chalk.blue("No valid code blocks found to apply."));
-      if (issues.length > 0) {
-        deps.error(deps.chalk.red(`Finished with ${issues.length} analysis issue(s).`));
-        process.exit(ExitCodes.ERROR);
-      }
+        deps.error(deps.chalk.blue("No valid code blocks found to apply."));
+    } else {
+        deps.error(
+            deps.chalk.blue(`Applying changes for ${validBlocks.length} valid code block(s)...`)
+        );
+        const applyResult = await writeFiles(deps, validBlocks, DEFAULT_ENCODING);
+        deps.log(formatWriteResults(deps, applyResult)); // Use log for final results
+
+        if (applyResult.stats.failedWrites > 0) {
+            exitCode = ExitCodes.ERROR; // Mark failure if any write failed
+        }
+    }
+
+    if (exitCode === ExitCodes.ERROR) {
+      deps.error(deps.chalk.red(`Finished with issues.`));
+    } else {
       deps.error(deps.chalk.green("Finished successfully."));
-      process.exit(ExitCodes.SUCCESS);
     }
+    deps.exit(exitCode);
 
-    deps.error(
-      deps.chalk.blue(`Applying changes for ${validBlocks.length} valid code block(s)...`)
-    );
-
-    // Apply the changes
-    const writeResults = await writeFiles(deps, validBlocks, DEFAULT_ENCODING);
-
-    // Log results
-    const formattedResults = formatWriteResults(deps, writeResults);
-    deps.log(formattedResults); // Use log, since this is user-facing output
-
-    // Determine exit code
-    if (issues.length > 0) {
-      deps.error(deps.chalk.red(`Finished with ${issues.length} analysis issue(s).`));
-      process.exit(ExitCodes.ERROR);
-    }
-
-    if (writeResults.stats.failedWrites > 0) {
-      deps.error(deps.chalk.red("Finished with write errors."));
-      process.exit(ExitCodes.ERROR);
-    }
-
-    deps.error(deps.chalk.green("Finished successfully."));
-    process.exit(ExitCodes.SUCCESS);
   } catch (err: unknown) {
+    // This catch block handles unexpected errors not caught elsewhere
+    // reportErrorAndExit is preferred for controlled exits
     deps.error(deps.chalk.red(`Unexpected error: ${getErrorMessage(err)}`));
-    process.exit(ExitCodes.ERROR);
+    deps.exit(ExitCodes.ERROR);
   }
 };
-
-// --- Dependency Implementation ---
 
 const createDefaultDependencies = async (): Promise<Dependencies> => {
   const { default: chalk } = await import("chalk");
@@ -395,11 +377,9 @@ const createDefaultDependencies = async (): Promise<Dependencies> => {
   const { dirname: nodeDirname } = await import("node:path");
   const { stat, mkdir: nodeMkdir } = await import("node:fs/promises");
 
-  // Add underscore prefix to unused encoding parameters
   const readFile = (filePath: FilePath, _encoding: Encoding): Promise<FileContent> =>
     Bun.file(filePath).text();
 
-  // Add underscore prefix to unused encoding parameters
   const writeFile = (filePath: FilePath, content: FileContent, _encoding: Encoding): Promise<void> =>
     Bun.write(filePath, content).then(() => {});
 
@@ -421,7 +401,6 @@ const createDefaultDependencies = async (): Promise<Dependencies> => {
 
   const readClipboard = async (): Promise<FileContent> => {
     try {
-      // Add ts-expect-error comment for potential Bun type issue
       // @ts-expect-error Bun clipboard types might be missing/incomplete
       const content = await Bun.clipboard.readText();
       return content ?? "";
@@ -439,33 +418,28 @@ const createDefaultDependencies = async (): Promise<Dependencies> => {
     readClipboard,
     log: console.log,
     error: console.error,
-    exit: process.exit, // Use process.exit directly
+    exit: process.exit,
     chalk: chalk,
-    parseArgs: nodeParseArgs, // Assign the imported function
+    parseArgs: nodeParseArgs,
     hrtime: process.hrtime,
   });
 };
 
-// --- Entry Point ---
 const main = async (): Promise<void> => {
-  // Default dependency implementation using native bun functions
   const deps = await createDefaultDependencies();
   try {
     await runApply(deps, Bun.argv);
   } catch (error: unknown) {
-    deps.error(deps.chalk.red(`Unhandled error: ${getErrorMessage(error)}`));
+    // This catch should ideally not be reached if runApply handles errors properly
+    deps.error(deps.chalk.red(`Unhandled error in main: ${getErrorMessage(error)}`));
     deps.exit(ExitCodes.ERROR);
   }
 };
 
-// Use as direct invocation
 if (import.meta.path === Bun.main) {
   await main();
-  // Explicitly exit in case any promises are still pending
-  process.exit(0);
 }
 
-// Export core functions for potential testing or programmatic use
 export {
   parseCliArguments,
   getInputContent,
@@ -475,4 +449,7 @@ export {
   formatWriteResults,
   runApply,
   createDefaultDependencies,
+  calculateLineChanges,
+  performWrite,
+  ensureDirectoryExists,
 };
