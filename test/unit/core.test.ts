@@ -1,8 +1,29 @@
 // test/unit/core.test.ts
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, mock } from "bun:test";
+import type chalk from "chalk";
+import path from "node:path";
 
 // We can directly import the function we want to test
-import { analyzeMarkdownContent } from "../../src/core";
+import { 
+  analyzeMarkdownContent, 
+  writeFiles, 
+  performWrite,
+  calculateLineChanges,
+  ensureDirectoryExists,
+  revertChanges,
+} from "../../src/core";
+import type { 
+  ApplyResult, 
+  CodeBlock, 
+  Dependencies, 
+  Encoding, 
+  ProcessingStats, 
+  WriteOperation, 
+  WriteResult, 
+  FilePath, 
+  FileContent,
+  Nanoseconds
+} from "../../src/types";
 
 describe("Core functions - analysis", () => {
   test("analyzeMarkdownContent should extract valid code blocks", () => {
@@ -198,6 +219,197 @@ const extraSpacesNextLine = true;
     expect(result.validBlocks[1]?.filePath).toBe("path/without/space/on/next/line.js");
     expect(result.validBlocks[2]?.filePath).toBe("path/with/extra/spaces.js");
     expect(result.validBlocks[3]?.filePath).toBe("path/with/extra/spaces/on/next/line.js");
+  });
+});
+
+describe("Core functions - reversion", () => {
+  test("writeFiles should preserve original states for reversion", async () => {
+    // Mock dependencies
+    const mockDeps = {
+      readFile: mock(async (filePath: FilePath) => {
+        if (filePath === "existing-file.js") {
+          return "// Original content";
+        }
+        throw new Error("ENOENT");
+      }),
+      writeFile: mock(async () => {}),
+      exists: mock(async (filePath: FilePath) => filePath === "existing-file.js"),
+      mkdir: mock(async () => {}),
+      dirname: mock((path: FilePath) => {
+        return path.split("/").slice(0, -1).join("/") || ".";
+      }),
+      hrtime: mock((time?: Nanoseconds): Nanoseconds => {
+        return [0, 5000000] as Nanoseconds; // 5ms in nanoseconds
+      }),
+    };
+
+    // Test data
+    const blocks: CodeBlock[] = [
+      {
+        filePath: "existing-file.js",
+        fileContent: "// Modified content",
+        startLineNumber: 1,
+      },
+      {
+        filePath: "new-file.js",
+        fileContent: "// New content",
+        startLineNumber: 5,
+      },
+    ];
+
+    // Execute
+    const result = await writeFiles(mockDeps, blocks, "utf-8");
+
+    // Verify
+    expect(result.originalStates.length).toBe(2);
+    
+    // Check first originalState (existing file)
+    const firstState = result.originalStates[0];
+    expect(firstState?.block.filePath).toBe("existing-file.js");
+    expect(firstState?.originalContent).toBe("// Original content");
+    expect(firstState?.originallyExisted).toBe(true);
+    
+    // Check second originalState (new file)
+    const secondState = result.originalStates[1];
+    expect(secondState?.block.filePath).toBe("new-file.js");
+    expect(secondState?.originalContent).toBe(null);
+    expect(secondState?.originallyExisted).toBe(false);
+    
+    // Verify the mocks were called correctly
+    expect(mockDeps.exists).toHaveBeenCalledTimes(2);
+    expect(mockDeps.readFile).toHaveBeenCalledWith("existing-file.js", "utf-8");
+  });
+
+  test("revertChanges functionality works correctly", async () => {
+    // Create mock dependencies including chalk-like structure
+    const mockChalk = {
+      red: (text: string) => `RED:${text}`,
+      yellow: (text: string) => `YELLOW:${text}`,
+      green: (text: string) => `GREEN:${text}`,
+      blue: (text: string) => `BLUE:${text}`,
+      cyan: (text: string) => `CYAN:${text}`,
+      gray: (text: string) => `GRAY:${text}`,
+      dim: (text: string) => `DIM:${text}`,
+      bold: (text: string) => `BOLD:${text}`,
+    } as unknown as typeof chalk;
+    
+    const mockDeps = {
+      writeFile: mock(async () => {}),
+      unlink: mock(async () => {}),
+      log: mock(() => {}),
+      error: mock(() => {}),
+      chalk: mockChalk,
+    };
+    
+    // Test data
+    const writeResults: WriteResult[] = [
+      { filePath: "existing-file.js", success: true, linesAdded: 5, linesDeleted: 2 },
+      { filePath: "new-file.js", success: true, linesAdded: 10, linesDeleted: 0 },
+    ];
+    
+    const originalStates: WriteOperation[] = [
+      {
+        block: { filePath: "existing-file.js", fileContent: "// Modified content", startLineNumber: 1 },
+        originalContent: "// Original content",
+        originallyExisted: true,
+      },
+      {
+        block: { filePath: "new-file.js", fileContent: "// New content", startLineNumber: 5 },
+        originalContent: null,
+        originallyExisted: false,
+      },
+    ];
+    
+    // Execute the revert
+    const result = await revertChanges(mockDeps, writeResults, originalStates, "utf-8");
+    
+    // Verify
+    expect(result).toBe(true);
+    expect(mockDeps.writeFile).toHaveBeenCalledWith(
+      "existing-file.js", 
+      "// Original content", 
+      "utf-8"
+    );
+    expect(mockDeps.unlink).toHaveBeenCalledWith("new-file.js");
+  });
+
+  test("revertChanges handles special cases", async () => {
+    // Create mock dependencies with chalk-like structure
+    const mockChalk = {
+      red: (text: string) => `RED:${text}`,
+      yellow: (text: string) => `YELLOW:${text}`,
+      green: (text: string) => `GREEN:${text}`,
+      blue: (text: string) => `BLUE:${text}`,
+      cyan: (text: string) => `CYAN:${text}`,
+      gray: (text: string) => `GRAY:${text}`,
+      dim: (text: string) => `DIM:${text}`,
+      bold: (text: string) => `BOLD:${text}`,
+    } as unknown as typeof chalk;
+    
+    const mockDeps = {
+      writeFile: mock(async (filePath: string) => {
+        if (filePath === "error-file.js") {
+          throw new Error("Write error");
+        }
+      }),
+      unlink: mock(async (filePath: string) => {
+        if (filePath === "error-delete.js") {
+          throw new Error("Delete error");
+        }
+      }),
+      log: mock(() => {}),
+      error: mock(() => {}),
+      chalk: mockChalk,
+    };
+    
+    // Test data for special cases
+    const writeResults: WriteResult[] = [
+      // File with null original content (existed but couldn't be read)
+      { filePath: "null-content.js", success: true, linesAdded: 7, linesDeleted: 0 },
+      // File that will error on write
+      { filePath: "error-file.js", success: true, linesAdded: 3, linesDeleted: 1 },
+      // File that will error on delete
+      { filePath: "error-delete.js", success: true, linesAdded: 2, linesDeleted: 0 },
+      // File with missing original state
+      { filePath: "missing-state.js", success: true, linesAdded: 5, linesDeleted: 0 },
+    ];
+    
+    const originalStates: WriteOperation[] = [
+      {
+        block: { filePath: "null-content.js", fileContent: "// New content", startLineNumber: 1 },
+        originalContent: null,
+        originallyExisted: true,
+      },
+      {
+        block: { filePath: "error-file.js", fileContent: "// Modified", startLineNumber: 10 },
+        originalContent: "// Original",
+        originallyExisted: true,
+      },
+      {
+        block: { filePath: "error-delete.js", fileContent: "// New", startLineNumber: 15 },
+        originalContent: null,
+        originallyExisted: false,
+      },
+      // Missing state for "missing-state.js"
+    ];
+    
+    // Execute
+    const result = await revertChanges(mockDeps, writeResults, originalStates, "utf-8");
+    
+    // Verify
+    expect(result).toBe(false); // Should fail due to errors
+    
+    // Should attempt to unlink file with null original content
+    expect(mockDeps.unlink).toHaveBeenCalledWith("null-content.js");
+    
+    // Should attempt to restore content for error-file.js
+    expect(mockDeps.writeFile).toHaveBeenCalledWith("error-file.js", "// Original", "utf-8");
+    
+    // Should attempt to delete file that didn't exist
+    expect(mockDeps.unlink).toHaveBeenCalledWith("error-delete.js");
+    
+    // Should log errors for the problematic files
+    expect(mockDeps.error).toHaveBeenCalledTimes(4); // Initial message + 3 errors
   });
 });
 

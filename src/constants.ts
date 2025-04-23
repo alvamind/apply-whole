@@ -1,6 +1,6 @@
 // src/constants.ts
 import type { ParseArgsConfig } from "node:util";
-import type { Encoding } from "./types";
+import type { Encoding, FilePath } from "./types";
 
 export const DEFAULT_ENCODING: Encoding = "utf-8";
 
@@ -52,3 +52,13 @@ export const ExitCodes = {
 } as const;
 
 export const NEWLINE_REGEX = /\r?\n/;
+
+// Confirmation and Revert Messages
+export const CONFIRMATION_PROMPT = "Apply these changes? (y/n): ";
+export const CHANGES_APPLIED_MESSAGE = "Changes applied successfully.";
+export const CHANGES_REVERTED_MESSAGE = "Changes reverted by user.";
+export const REVERTING_MESSAGE = "Reverting changes...";
+export const REVERT_ACTION_MESSAGE = (filePath: FilePath, action: "restored" | "deleted" | string): string =>
+  `   Reverted: File ${filePath} ${action}.`;
+export const REVERT_ERROR_MESSAGE = (filePath: FilePath, error: string): string =>
+  `   Error reverting ${filePath}: ${error}`;

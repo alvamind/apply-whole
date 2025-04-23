@@ -42,15 +42,23 @@ export const setupTestEnvironment = async (): Promise<TestEnvironment> => {
     stderr: string;
     exitCode: number | null;
   }> => {
-    const env = { ...Bun.env, NO_COLOR: "1" }; // Use Bun.env instead of process.env
-    const spawnedProcess = Bun.spawnSync( // Renamed variable to avoid shadowing
+    // Set up environment variables for testing
+    // We auto-confirm changes by default, but if stdin is provided (for reversion tests),
+    // we don't auto-confirm so the provided stdin can be used
+    const env = { 
+      ...Bun.env, 
+      NO_COLOR: "1",
+      BUN_APPLY_AUTO_YES: stdin ? "false" : "true" 
+    };
+    
+    const spawnedProcess = Bun.spawnSync(
       ["bun", "run", join(import.meta.dir, "..", "src", "core.ts"), ...args],
       {
         cwd: tempDir,
         stdin: stdin ? new TextEncoder().encode(stdin) : undefined,
         stdout: "pipe",
         stderr: "pipe",
-        env, // Use the pre-defined env object
+        env,
       }
     );
 

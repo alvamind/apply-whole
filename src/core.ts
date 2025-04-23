@@ -8,6 +8,12 @@ import {
   ARGS_CONFIG,
   ExitCodes,
   NEWLINE_REGEX,
+  REVERTING_MESSAGE,
+  REVERT_ACTION_MESSAGE,
+  REVERT_ERROR_MESSAGE,
+  CONFIRMATION_PROMPT,
+  CHANGES_APPLIED_MESSAGE,
+  CHANGES_REVERTED_MESSAGE,
 } from "./constants";
 import type {
   FilePath,
@@ -15,7 +21,6 @@ import type {
   CodeBlock,
   AnalysisResult,
   AnalysisIssue,
-  DelimiterLine,
   WriteResult,
   ApplyResult,
   Dependencies,
@@ -26,6 +31,7 @@ import type {
   ParsedArgsValues,
   LineChanges,
   ProcessingStats,
+  WriteOperation,
 } from "./types";
 import chalk from "chalk";
 import clipboardy from "clipboardy";
@@ -370,11 +376,54 @@ const formatWriteResults = (
   return [...resultLines, ...summary].join("\n");
 };
 
+const revertChanges = async (
+  deps: Pick<Dependencies, "writeFile" | "unlink" | "log" | "error" | "chalk">,
+  successfulWriteResults: ReadonlyArray<WriteResult>,
+  originalStates: ReadonlyArray<WriteOperation>,
+  encoding: Encoding
+): Promise<boolean> => {
+  deps.error(deps.chalk.yellow(REVERTING_MESSAGE)); // Use error stream for progress like other steps
+  let allRevertedSuccessfully = true;
+
+  const revertPromises = successfulWriteResults.map(async (result) => {
+    const originalState = originalStates.find(os => os.block.filePath === result.filePath);
+    if (!originalState) {
+      deps.error(deps.chalk.red(`   Error: Cannot find original state for ${result.filePath} to revert.`));
+      allRevertedSuccessfully = false;
+      return;
+    }
+
+    try {
+      if (originalState.originallyExisted) {
+        if (originalState.originalContent !== null) {
+          await deps.writeFile(result.filePath, originalState.originalContent, encoding);
+          deps.log(REVERT_ACTION_MESSAGE(result.filePath, "restored"));
+        } else {
+          // File existed but couldn't be read, or was empty. 
+          // For safety, delete the file since we can't restore its content
+          await deps.unlink(result.filePath);
+          deps.log(REVERT_ACTION_MESSAGE(result.filePath, "deleted (original content was null/unreadable)"));
+        }
+      } else {
+        // File did not exist originally, so delete the one we created
+        await deps.unlink(result.filePath);
+        deps.log(REVERT_ACTION_MESSAGE(result.filePath, "deleted"));
+      }
+    } catch (revertError: unknown) {
+      deps.error(deps.chalk.red(REVERT_ERROR_MESSAGE(result.filePath, getErrorMessage(revertError))));
+      allRevertedSuccessfully = false;
+    }
+  });
+
+  await Promise.all(revertPromises);
+  return allRevertedSuccessfully;
+};
+
 const runApply = async (
   deps: Dependencies,
   argv: ReadonlyArray<string>
 ): Promise<void> => {
-  let exitCode: number = ExitCodes.SUCCESS;
+  let finalExitCode: number = ExitCodes.SUCCESS;
   try {
     const args = parseCliArguments(deps, argv);
     const content = await getInputContent(deps, args, DEFAULT_ENCODING);
@@ -385,10 +434,10 @@ const runApply = async (
     if (issues.length > 0) {
       deps.error(deps.chalk.yellow("\nAnalysis Issues Found:"));
       formatAnalysisIssues(deps, issues).forEach(issue => deps.error(issue));
-      exitCode = ExitCodes.ERROR; // Mark potential failure even if some blocks are valid
+      finalExitCode = ExitCodes.ERROR; // Mark potential failure even if some blocks are valid
       if (validBlocks.length === 0) {
          deps.error(deps.chalk.red("\nNo valid code blocks were extracted due to analysis issues."));
-         return deps.exit(exitCode);
+         return deps.exit(finalExitCode);
       }
       deps.error(deps.chalk.yellow("\nAttempting to process any valid blocks found..."));
     } else {
@@ -405,16 +454,54 @@ const runApply = async (
         deps.log(formatWriteResults(deps, applyResult)); // Use log for final results
 
         if (applyResult.stats.failedWrites > 0) {
-            exitCode = ExitCodes.ERROR; // Mark failure if any write failed
+            finalExitCode = ExitCodes.ERROR; // Mark failure if any write failed
+        }
+        
+        // Proceed to confirmation only if there were successful writes
+        const successfulWrites = applyResult.writeResults.filter(r => r.success);
+        if (successfulWrites.length > 0) {
+            // Check for auto-apply environment variable or stdin input
+            const isTestEnvironment = process.env['BUN_APPLY_AUTO_YES'] === 'true';
+            
+            // Skip prompting in test environment
+            let shouldKeepChanges = true;
+            if (!isTestEnvironment) {
+                const response = await deps.prompt(deps.chalk.yellow(CONFIRMATION_PROMPT));
+                const confirmation = response.toLowerCase().trim();
+                shouldKeepChanges = confirmation === 'y' || confirmation === 'yes';
+            }
+            
+            if (shouldKeepChanges) {
+                deps.log(deps.chalk.green(CHANGES_APPLIED_MESSAGE));
+                // Keep finalExitCode as previously determined
+            } else {
+                // User chose 'n', 'no', or anything else - revert
+                const revertSuccessful = await revertChanges(
+                    deps,
+                    successfulWrites,
+                    applyResult.originalStates,
+                    DEFAULT_ENCODING
+                );
+                
+                if (revertSuccessful) {
+                    deps.log(deps.chalk.green(CHANGES_REVERTED_MESSAGE));
+                    // Even if analysis had issues, user revert means operation completed as requested
+                    // Override previous error status if revert was clean
+                    finalExitCode = ExitCodes.SUCCESS;
+                } else {
+                    deps.error(deps.chalk.red("Errors occurred during revert operation. Filesystem may be in an inconsistent state."));
+                    finalExitCode = ExitCodes.ERROR; // Revert failed, definitely an error state
+                }
+            }
         }
     }
 
-    if (exitCode === ExitCodes.ERROR) {
+    if (finalExitCode === ExitCodes.ERROR) {
       deps.error(deps.chalk.red(`Finished with issues.`));
     } else {
       deps.error(deps.chalk.green("Finished successfully."));
     }
-    deps.exit(exitCode);
+    deps.exit(finalExitCode);
 
   } catch (err: unknown) {
     // This catch block handles unexpected errors not caught elsewhere
@@ -521,4 +608,5 @@ export {
   calculateLineChanges,
   performWrite,
   ensureDirectoryExists,
+  revertChanges,
 };

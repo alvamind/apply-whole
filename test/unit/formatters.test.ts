@@ -1,6 +1,6 @@
 // test/unit/formatters.test.ts
 import { describe, test, expect } from "bun:test";
-import type { AnalysisIssue, WriteResult, ApplyResult } from "../../src/types";
+import type { AnalysisIssue, WriteResult, ApplyResult, WriteOperation } from "../../src/types";
 
 describe("Result Formatters", () => {
   // Mock chalk for testing formatters
@@ -56,6 +56,7 @@ describe("Result Formatters", () => {
     
     const applyResult: ApplyResult = {
       writeResults,
+      originalStates: [],
       stats: {
         totalAttempted: 2,
         successfulWrites: 1,

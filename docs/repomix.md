@@ -72,8 +72,12 @@ if (import.meta.path === Bun.main) {
 import type { ParseArgsConfig } from "node:util";
 import type { Encoding } from "./types";
 export const DEFAULT_ENCODING: Encoding = "utf-8";
+// Updated regex to support path on same line or next line
 export const CODE_BLOCK_START_LINE_REGEX: RegExp =
-  /^```(?:[a-z]+)?\s*\/\/\s*(?<path>[^\r\n]+)\s*$/i;
+  /^```(?:[a-z]+)?\s*(?:\/\/\s*(?<path>[^\r\n]+)\s*)?$/i;
+// Regex to detect if a path is on the line following the opening delimiter
+export const PATH_ON_NEXT_LINE_REGEX: RegExp =
+  /^\/\/\s*(?<path>[^\r\n]+)\s*$/;
 export const ANY_CODE_BLOCK_DELIMITER_REGEX: RegExp = /^```/;
 export const HELP_MESSAGE: string = `
 Usage: bun apply [options]
@@ -110,7 +114,6 @@ export const NEWLINE_REGEX = /\r?\n/;
 
 ## File: src/types.ts
 ````typescript
-// src/types.ts
 import type { ChalkInstance } from "chalk";
 import type { ParseArgsConfig } from "node:util";
 export type FilePath = string;
@@ -154,10 +157,18 @@ export interface LineChanges {
     readonly linesAdded: number;
     readonly linesDeleted: number;
 }
+// Represents the state *before* a write operation
+export interface WriteOperation {
+  readonly block: CodeBlock;
+  readonly originalContent: FileContent | null; // Content before write, null if didn't exist
+  readonly originallyExisted: boolean;         // Did the file exist before the write attempt?
+}
+// Represents the outcome *after* a write operation attempt
 export interface WriteResult extends LineChanges {
   readonly filePath: FilePath;
   readonly success: boolean;
   readonly error?: Error;
+  // Removed originalContent and originallyExisted from here
 }
 export interface ProcessingStats extends LineChanges {
   readonly totalAttempted: number;
@@ -169,6 +180,7 @@ export interface ProcessingStats extends LineChanges {
 }
 export interface ApplyResult {
   readonly writeResults: ReadonlyArray<WriteResult>;
+  readonly originalStates: ReadonlyArray<WriteOperation>; // Holds pre-write info needed for revert
   readonly stats: ProcessingStats;
 }
 export interface Dependencies {
@@ -184,6 +196,8 @@ export interface Dependencies {
   readonly chalk: ChalkInstance;
   readonly parseArgs: <T extends ParseArgsConfig>(config: T) => ParsedArgsValues;
   readonly hrtime: (time?: Nanoseconds) => Nanoseconds;
+  readonly prompt: (message: string) => Promise<string>; // Added for user confirmation
+  readonly unlink: (path: FilePath) => Promise<void>;   // Added for reverting newly created files
 }
 ````
 
@@ -193,6 +207,7 @@ export interface Dependencies {
 import {
   DEFAULT_ENCODING,
   CODE_BLOCK_START_LINE_REGEX,
+  PATH_ON_NEXT_LINE_REGEX,
   ANY_CODE_BLOCK_DELIMITER_REGEX,
   HELP_MESSAGE,
   ARGS_CONFIG,
@@ -304,45 +319,71 @@ const analyzeMarkdownContent = (
     const lines = markdownContent.split(NEWLINE_REGEX);
     const issues: AnalysisIssue[] = [];
     const validBlocks: CodeBlock[] = [];
-    const delimiterLines: DelimiterLine[] = lines.reduce(
-        (acc: DelimiterLine[], lineContent, index) =>
-            ANY_CODE_BLOCK_DELIMITER_REGEX.test(lineContent.trimStart())
-                ? [...acc, { lineNumber: index + 1, content: lineContent }]
-                : acc,
-        []
-    );
-    if (delimiterLines.length % 2 !== 0) {
-        const lastDelimiter = delimiterLines[delimiterLines.length - 1];
-        if (lastDelimiter) {
-            issues.push({
-                lineNumber: lastDelimiter.lineNumber,
-                lineContent: lastDelimiter.content,
-                message: "Found an odd number of '```' delimiters. Blocks may be incomplete or incorrectly matched.",
-            });
+    let inCodeBlock = false;
+    let currentBlockStart = 0;
+    let currentBlockPath = "";
+    let contentStart = 0;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i] || ""; // Handle potentially undefined lines
+        const trimmedLine = line.trimStart();
+        // Check if this line starts or ends a code block
+        if (ANY_CODE_BLOCK_DELIMITER_REGEX.test(trimmedLine)) {
+            if (!inCodeBlock) {
+                // Start of a code block
+                inCodeBlock = true;
+                currentBlockStart = i;
+                // Check if path is on the same line as the opening delimiter
+                const match = trimmedLine.match(CODE_BLOCK_START_LINE_REGEX);
+                if (match?.groups?.['path']) {
+                    currentBlockPath = match.groups['path'].trim();
+                    contentStart = i + 1; // Content starts on the next line
+                } else if (i + 1 < lines.length) {
+                    // Check if path is on the next line
+                    const nextLine = lines[i + 1] || "";
+                    const pathMatch = nextLine.match(PATH_ON_NEXT_LINE_REGEX);
+                    if (pathMatch?.groups?.['path']) {
+                        currentBlockPath = pathMatch.groups['path'].trim();
+                        contentStart = i + 2; // Content starts two lines after
+                    } else {
+                        // No path found
+                        currentBlockPath = "";
+                    }
+                } else {
+                    // Last line of the file can't have a path on next line
+                    currentBlockPath = "";
+                }
+            } else {
+                // End of a code block
+                inCodeBlock = false;
+                if (currentBlockPath) {
+                    // We have a valid path, extract content
+                    const contentEnd = i;
+                    const blockContent = lines.slice(contentStart, contentEnd).join('\n');
+                    validBlocks.push({
+                        filePath: currentBlockPath,
+                        fileContent: blockContent,
+                        startLineNumber: currentBlockStart + 1 // Convert to 1-indexed
+                    });
+                } else {
+                    // No valid path was found
+                    issues.push({
+                        lineNumber: currentBlockStart + 1, // Convert to 1-indexed
+                        lineContent: lines[currentBlockStart] || "",
+                        message: "Invalid code block start tag format. Expected: ```[lang] // path/to/file.ext`",
+                    });
+                }
+                // Reset state
+                currentBlockPath = "";
+            }
         }
     }
-    for (let i = 0; i < delimiterLines.length - 1; i += 2) {
-        const startLine = delimiterLines[i];
-        const endLine = delimiterLines[i + 1];
-        if (!startLine || !endLine) continue;
-        const trimmedStartLineContent = startLine.content.trim();
-        const match = trimmedStartLineContent.match(CODE_BLOCK_START_LINE_REGEX);
-        if (!match?.groups?.['path']) {
-            issues.push({
-                lineNumber: startLine.lineNumber,
-                lineContent: startLine.content,
-                message: "Invalid code block start tag format. Expected: ```[lang] // path/to/file.ext`",
-            });
-        } else {
-            const codeContent = lines
-                .slice(startLine.lineNumber, endLine.lineNumber - 1)
-                .join('\n');
-            validBlocks.push({
-                filePath: match.groups['path'].trim(),
-                fileContent: codeContent,
-                startLineNumber: startLine.lineNumber,
-            });
-        }
+    // Check if there's an unclosed code block
+    if (inCodeBlock) {
+        issues.push({
+            lineNumber: currentBlockStart + 1, // Convert to 1-indexed
+            lineContent: lines[currentBlockStart] || "",
+            message: "Found an odd number of '```' delimiters. Blocks may be incomplete or incorrectly matched.",
+        });
     }
     return {
         validBlocks: Object.freeze(validBlocks),
@@ -411,6 +452,24 @@ const writeFiles = async (
   encoding: Encoding
 ): Promise<ApplyResult> => {
   const startTime = deps.hrtime();
+  // Track the original state of each file before modifications
+  const originalStates = await Promise.all(blocks.map(async (block) => {
+    let originalContent: FileContent | null = null;
+    const fileExists = await deps.exists(block.filePath);
+    if (fileExists) {
+      try {
+        originalContent = await deps.readFile(block.filePath, encoding);
+      } catch (error) {
+        // If error reading file, treat as if it doesn't exist
+        originalContent = null;
+      }
+    }
+    return {
+      block,
+      originalContent,
+      originallyExisted: fileExists
+    };
+  }));
   const writePromises = blocks.map(block => performWrite(deps, block, encoding));
   const writeResults = await Promise.all(writePromises);
   const endTime = deps.hrtime(startTime);
@@ -434,6 +493,7 @@ const writeFiles = async (
   }), initialStats);
   return {
     writeResults: Object.freeze(writeResults),
+    originalStates: Object.freeze(originalStates),
     stats: finalStats
   };
 };
@@ -523,7 +583,7 @@ const runApply = async (
 const createDefaultDependencies = async (): Promise<Dependencies> => {
   const { parseArgs: nodeParseArgs } = await import("node:util");
   const { dirname: nodeDirname } = await import("node:path");
-  const { stat, mkdir: nodeMkdir } = await import("node:fs/promises");
+  const { stat, mkdir: nodeMkdir, unlink: nodeUnlink } = await import("node:fs/promises");
   const readFile = (filePath: FilePath, _encoding: Encoding): Promise<FileContent> =>
     Bun.file(filePath).text();
   const writeFile = (filePath: FilePath, content: FileContent, _encoding: Encoding): Promise<void> =>
@@ -550,6 +610,18 @@ const createDefaultDependencies = async (): Promise<Dependencies> => {
       throw new Error(`Failed to read from clipboard: ${getErrorMessage(error)}`);
     }
   };
+  const prompt = async (message: string): Promise<string> => {
+    process.stdout.write(message);
+    return new Promise((resolve) => {
+      const onData = (data: Buffer) => {
+        resolve(data.toString().trim());
+      };
+      process.stdin.once('data', onData);
+    });
+  };
+  const unlink = async (path: FilePath): Promise<void> => {
+    await nodeUnlink(path);
+  };
   return Object.freeze({
     readFile,
     writeFile,
@@ -560,9 +632,11 @@ const createDefaultDependencies = async (): Promise<Dependencies> => {
     log: console.log,
     error: console.error,
     exit: process.exit,
-    chalk: chalk,
+    chalk,
     parseArgs: nodeParseArgs,
     hrtime: process.hrtime,
+    prompt,
+    unlink
   });
 };
 const main = async (): Promise<void> => {

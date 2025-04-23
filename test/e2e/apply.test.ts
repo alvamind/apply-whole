@@ -318,4 +318,51 @@ CMD ["echo", "hello"]
     // Consider adding tests for write errors if possible, although reliably
     // triggering permission errors etc. in CI can be difficult.
     // For example, creating a read-only directory and trying to write into it.
+
+    test("should revert changes when user chooses not to apply them", async () => {
+      const { createInputFile, runCommand, fileExists, readFileContent } = getEnv();
+      
+      // First, create a file with original content that will be modified
+      const originalPath = join(getEnv().tempDir, "existing-file.js");
+      await Bun.write(originalPath, "// Original content\nconsole.log('original');");
+      
+      const markdown = `
+\`\`\`javascript // existing-file.js
+// Modified content
+console.log('modified');
+\`\`\`
+
+\`\`\`javascript // new-file.js
+// New file content
+console.log('new file');
+\`\`\`
+      `;
+      
+      const inputPath = await createInputFile(markdown);
+      
+      // Run with input from stdin that will answer "n" to the confirmation prompt
+      const { stdout, stderr, exitCode } = await runCommand(["-i", inputPath], "n\n");
+
+      // Should exit with success because reversion was successful
+      expect(exitCode).toBe(ExitCodes.SUCCESS);
+      
+      // Check output messages
+      expect(stderr).toContain("Applying changes for 2 valid code block(s)...");
+      expect(stdout).toContain("✔ Written: existing-file.js");
+      expect(stdout).toContain("✔ Written: new-file.js");
+      expect(stdout).toContain("Summary:"); 
+      expect(stdout).toContain("Attempted: 2 file(s) (2 succeeded, 0 failed)");
+      
+      // Check reversion messages
+      expect(stderr).toContain("Reverting changes...");
+      expect(stdout).toContain("Changes reverted by user");
+      
+      // Verify the existing file was restored to its original content
+      expect(await fileExists("existing-file.js")).toBe(true);
+      const existingContent = await readFileContent("existing-file.js");
+      expect(existingContent).toBe("// Original content\nconsole.log('original');");
+      
+      // Verify the new file was deleted during reversion
+      expect(await fileExists("new-file.js")).toBe(false);
+    });
 });
