@@ -6,14 +6,15 @@
   "module": "dist/index.js",
   "main": "dist/index.js",
   "bin": {
-    "apply": "dist/cli.js"
+    "apply": "bin/apply.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "bin"
   ],
   "scripts": {
     "build": "bun build --minify --target bun --outdir dist ./index.ts ./src/cli.ts",
-    "postbuild": "node -e \"try { require('fs').chmodSync('./dist/cli.js', '755') } catch (e) { console.log('Note: chmod not available on Windows') }\"",
+    "postbuild": "mkdir -p bin && echo '#!/usr/bin/env bun\nimport \"../dist/src/cli.js\"' > bin/apply.js && node -e \"try { require('fs').chmodSync('./bin/apply.js', '755') } catch (e) { console.log('Note: chmod not available on Windows') }\"",
     "prepublishOnly": "bun run build",
     "start": "bun run index.ts",
     "dev": "bun run --watch index.ts",
