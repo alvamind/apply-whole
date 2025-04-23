@@ -12,6 +12,8 @@ A blazing fast 🚀 CLI tool, built with [Bun](https://bun.sh/), to extract spec
 *   **Filesystem Application:** Writes the extracted code to the corresponding file paths.
 *   **Automatic Directory Creation:** Creates necessary directories for target files if they don't exist.
 *   **Pre-Analysis:** Scans the markdown for formatting issues (like mismatched delimiters or invalid path comments) *before* applying changes.
+*   **TypeScript Linting:** Runs TypeScript checking before and after applying changes to ensure code quality.
+*   **Linting Stats:** Reports the number of TypeScript errors and warnings before and after changes are applied.
 *   **Interactive Confirmation:** Prompts the user to confirm the detected changes before writing to the filesystem.
 *   **Safe Revert:** Automatically reverts all successful changes if the user declines the confirmation prompt.
 *   **Detailed Feedback:** Reports analysis issues and provides clear success/failure status for each file write operation.
@@ -119,6 +121,7 @@ The core command is `apply`.
     Options:
       -i, --input <file>   Specify the input markdown file path.
                            If omitted, reads from the system clipboard.
+      --no-lint            Skip TypeScript linting before and after applying changes.
       -h, --help           Display this help message and exit.
     ```
 
@@ -266,6 +269,48 @@ Reverting changes...
 Changes reverted by user.
 Finished successfully.
 ```
+
+## TypeScript Linting 🔍
+
+`apply-whole` includes an integrated TypeScript linting feature that runs before and after your changes are applied:
+
+**How it works:**
+
+1. **Initial Check:** Before applying changes, the tool runs TypeScript type checking and reports any current errors/warnings.
+2. **Final Check:** After applying changes (but before confirmation), it runs TypeScript checking again.
+3. **Diff Reporting:** The tool compares the before/after results and shows you if your changes improved or worsened the codebase:
+   - Red numbers indicate increased errors/warnings
+   - Green numbers indicate decreased errors/warnings
+
+**Example Output:**
+
+```
+$ apply -i changes.md
+▶ Running TypeScript check...
+▶ TypeScript check complete. TypeScript - Errors: 2, Warnings: 1
+▶ Reading input...
+▶ Analyzing markdown content...
+Analysis complete. No issues found.
+▶ Applying changes for 1 valid code block(s)...
+✔ Written: src/component.tsx (+15, -10)
+▶ Running TypeScript check...
+▶ TypeScript check complete. TypeScript - Errors: 0, Warnings: 1
+▶ Change - Errors: -2, Warnings: +0
+
+Apply these changes? (y/n): y
+Changes applied successfully.
+▶ Finished successfully.
+```
+
+**Disabling Linting:**
+
+If you'd like to skip the TypeScript checking (for speed or if working in a non-TypeScript project), use the `--no-lint` flag:
+
+```bash
+apply -i changes.md --no-lint
+```
+
+This will bypass both the initial and final TypeScript checks.
 
 ## Contributing 🤝
 

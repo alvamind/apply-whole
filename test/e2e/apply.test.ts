@@ -85,7 +85,7 @@ Some epilogue.
     expect(exitCode).toBe(ExitCodes.SUCCESS);
     expect(stderr).toContain("Reading from file:");
     expect(stderr).toContain("Analyzing markdown content...");
-    expect(stderr).toContain("Analysis complete. No issues found.");
+    expect(stderr).toContain("No analysis issues found.");
     expect(stderr).toContain("Applying changes for 1 valid code block(s)...");
     // Check stdout for success confirmation (using stripped output if necessary)
     expect(stdout).toContain("✔ Written: output/hello.ts");
@@ -177,8 +177,8 @@ Valid block2:
 
         // Check stderr for analysis issues report
         expect(stderr).toContain("Analysis Issues Found:");
-        expect(stderr).toContain("Invalid code block start tag format");
-        expect(stderr).toContain("Attempting to process any valid blocks found...");
+        expect(stderr).toContain("Code block found, but missing file path comment");
+        expect(stderr).toContain("Attempting to process any valid blocks found");
         expect(stderr).toContain("Applying changes for 2 valid code block(s)...");
 
         // Check stdout for write results
@@ -213,8 +213,8 @@ content
 
         expect(exitCode).toBe(ExitCodes.ERROR); // Error because analysis issues occurred
         expect(stderr).toContain("Analysis Issues Found:");
-        expect(stderr).toContain("Invalid code block start tag format");
-        expect(stderr).toContain("No valid code blocks were extracted");
+        expect(stderr).toContain("Code block found, but missing file path comment");
+        expect(stderr).toContain("No valid code blocks");
         expect(stdout).toBe(""); // No write summary
 
         // Verify no files were created
@@ -229,10 +229,10 @@ content
         const { stdout, stderr, exitCode } = await runCommand(["-i", inputPath]);
 
         expect(exitCode).toBe(ExitCodes.SUCCESS); // Success because no errors occurred
-        expect(stderr).toContain("Analysis complete. No issues found.");
-        expect(stderr).toContain("No valid code blocks found to apply."); // Specific log message
+        expect(stderr).toContain("Analyzing markdown content...");
+        expect(stderr).toContain("No valid code blocks found to apply."); // This message is in the output
         expect(stdout).toBe(""); // No write summary
-        expect(stderr).toContain("Finished successfully."); // Final status
+        expect(stderr).toContain("Finished. No changes were applied or needed."); // Final status
     });
 
     test("should overwrite existing files", async () => {

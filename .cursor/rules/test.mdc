@@ -1,7 +1,7 @@
 ---
 description: 
-globs: *.test.ts,*test.ts
-alwaysApply: false
+globs: 
+alwaysApply: true
 ---
 test.md rules below
 

@@ -36,6 +36,7 @@ export interface ParsedArgsValues {
   readonly values: {
     readonly input?: string;
     readonly help?: boolean;
+    readonly "no-lint"?: boolean; // Added no-lint
   };
 }
 
@@ -43,6 +44,7 @@ export interface ParsedArgsResult {
   readonly inputFile: FilePath | null;
   readonly useClipboard: boolean;
   readonly showHelp: boolean;
+  readonly skipLinter: boolean; // Added skipLinter
 }
 
 export interface LineChanges {
@@ -77,6 +79,12 @@ export interface ApplyResult {
   readonly stats: ProcessingStats;
 }
 
+// --- Linter Result ---
+export interface LinterResult {
+    readonly errors: number;
+    readonly warnings: number;
+}
+
 // --- Base Dependencies ---
 interface FileSystemDeps {
   readonly readFile: (filePath: FilePath, encoding: Encoding) => Promise<FileContent>;
@@ -85,6 +93,7 @@ interface FileSystemDeps {
   readonly mkdir: (path: FilePath, options: { readonly recursive: boolean }) => Promise<void>;
   readonly dirname: (path: FilePath) => FilePath;
   readonly unlink: (path: FilePath) => Promise<void>;
+  readonly rmdir: (path: FilePath, options?: { readonly recursive: boolean }) => Promise<void>;
 }
 
 interface ClipboardDeps {
@@ -102,6 +111,8 @@ interface ProcessDeps {
   readonly parseArgs: <T extends ParseArgsConfig>(config: T) => ParsedArgsValues;
   readonly hrtime: (time?: Nanoseconds) => Nanoseconds;
   readonly prompt: (message: string) => Promise<string>;
+  readonly spawn: typeof Bun.spawn;
+  readonly runLinter: () => Promise<LinterResult | null>; // Updated return type
 }
 
 // --- Combined Dependency Interface ---
@@ -114,9 +125,11 @@ export interface Dependencies extends
 // --- Specific Dependency Subsets for Functions ---
 export type ErrorExitDeps = Pick<Dependencies, "error" | "exit" | "chalk">;
 export type CliDeps = Pick<Dependencies, "parseArgs" | "log"> & ErrorExitDeps;
-export type InputDeps = Pick<Dependencies, "readFile" | "readClipboard"> & ErrorExitDeps;
+export type InputDeps = Pick<Dependencies, "readFile" | "readClipboard" | "error" | "chalk"> & ErrorExitDeps;
 export type FormatDeps = Pick<Dependencies, "chalk">;
 export type DirectoryDeps = Pick<Dependencies, "exists" | "mkdir" | "dirname">;
 export type WriteFileDeps = Pick<Dependencies, "writeFile" | "readFile"> & DirectoryDeps;
-export type WriteProcessDeps = WriteFileDeps & Pick<Dependencies, "hrtime" | "exists">;
-export type RevertDeps = Pick<Dependencies, "writeFile" | "unlink" | "log"> & ErrorExitDeps;
+export type WriteProcessDeps = WriteFileDeps & Pick<Dependencies, "hrtime" | "exists" | "error" | "chalk">; // Added error/chalk for status
+export type RevertDeps = Pick<Dependencies, "writeFile" | "unlink" | "log" | "error" | "chalk" | "dirname" | "rmdir"> & ErrorExitDeps; // Added error/chalk for status
+export type LintingDeps = Pick<Dependencies, "runLinter" | "error" | "chalk">;
+export type RunApplyDeps = Dependencies & LintingDeps;

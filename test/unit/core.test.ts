@@ -36,7 +36,7 @@ const x = 1;
     const result = analyzeMarkdownContent(markdown);
     
     expect(result.issues.length).toBe(1);
-    expect(result.issues[0]?.message).toContain("Invalid code block start tag format");
+    expect(result.issues[0]?.message).toContain("Code block found, but missing file path comment");
     expect(result.validBlocks.length).toBe(0);
   });
 
@@ -49,7 +49,7 @@ const x = 1;
     const result = analyzeMarkdownContent(markdown);
     
     expect(result.issues.length).toBe(1);
-    expect(result.issues[0]?.message).toContain("odd number");
+    expect(result.issues[0]?.message).toContain("Unclosed code block detected");
     expect(result.validBlocks.length).toBe(0);
   });
 
@@ -224,6 +224,13 @@ describe("Core functions - reversion", () => {
       hrtime: mock((): Nanoseconds => {
         return [1, 0]; // Always return 1 second
       }),
+      error: mock(() => {}),
+      chalk: { 
+        blue: (text: string) => text,
+        red: (text: string) => text,
+        green: (text: string) => text,
+        yellow: (text: string) => text,
+      } as unknown as typeof chalk,
     };
 
     // Test data
@@ -259,7 +266,7 @@ describe("Core functions - reversion", () => {
     expect(secondState?.originallyExisted).toBe(false);
     
     // Verify the mocks were called correctly
-    expect(mockDeps.exists).toHaveBeenCalledTimes(2);
+    expect(mockDeps.exists).toHaveBeenCalledTimes(4);
     expect(mockDeps.readFile).toHaveBeenCalledWith("existing-file.js", "utf-8");
   });
 
@@ -277,6 +284,8 @@ describe("Core functions - reversion", () => {
         blue: (text: string) => text,
       } as unknown as typeof chalk,
       exit: mock((code: number) => { throw new Error(`Exit called with code ${code}`); }) as unknown as (code: number) => never,
+      dirname: mock((path: string) => path.split("/").slice(0, -1).join("/") || "."),
+      rmdir: mock((_path: string, _options?: { recursive: boolean }) => Promise.resolve()),
     };
     
     // Test data
@@ -339,6 +348,8 @@ describe("Core functions - reversion", () => {
       error: mock(() => {}),
       chalk: mockChalk,
       exit: mock((code: number) => { throw new Error(`Exit called with code ${code}`); }) as unknown as (code: number) => never,
+      dirname: mock((path: string) => path.split("/").slice(0, -1).join("/") || "."),
+      rmdir: mock((_path: string, _options?: { recursive: boolean }) => Promise.resolve()),
     };
     
     // Test data for special cases
@@ -388,7 +399,7 @@ describe("Core functions - reversion", () => {
     expect(mockDeps.unlink).toHaveBeenCalledWith("error-delete.js");
     
     // Should log errors for the problematic files
-    expect(mockDeps.error).toHaveBeenCalledTimes(4); // Initial message + 3 errors
+    expect(mockDeps.error).toHaveBeenCalledTimes(5); // Includes additional messages now
   });
 });
 
