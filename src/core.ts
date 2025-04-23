@@ -440,16 +440,9 @@ if (import.meta.path === Bun.main) {
   await main();
 }
 
-export {
-  parseCliArguments,
-  getInputContent,
-  analyzeMarkdownContent,
-  writeFiles,
-  formatAnalysisIssues,
-  formatWriteResults,
-  runApply,
-  createDefaultDependencies,
-  calculateLineChanges,
-  performWrite,
-  ensureDirectoryExists,
+// Export these functions for use in index.ts
+export { 
+  analyzeMarkdownContent, 
+  runApply, 
+  createDefaultDependencies 
 };

@@ -1,14 +1,53 @@
 {
   "name": "apply-whole",
-  "module": "index.ts",
+  "version": "1.0.0",
+  "description": "A blazing fast CLI tool to extract specially formatted code blocks from markdown and write them to your filesystem",
   "type": "module",
+  "module": "dist/index.js",
+  "main": "dist/index.js",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "types": "dist/index.d.ts",
+  "bin": {
+    "apply": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "src",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target node",
+    "build:types": "tsc --emitDeclarationOnly --outDir dist",
+    "prepublishOnly": "bun run build && bun run build:types",
+    "start": "bun run src/index.ts",
+    "test": "bun test"
+  },
+  "keywords": [
+    "markdown",
+    "code-blocks",
+    "cli",
+    "extract",
+    "filesystem",
+    "bun"
+  ],
+  "author": "",
+  "license": "MIT",
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "typescript": "^5"
   },
   "peerDependencies": {
     "typescript": "^5"
   },
   "dependencies": {
     "chalk": "^5.4.1"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
   }
 }
