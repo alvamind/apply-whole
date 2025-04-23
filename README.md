@@ -16,13 +16,53 @@ A blazing fast 🚀 CLI tool, built with [Bun](https://bun.sh/), to extract spec
 *   **Line Change Stats:** Shows the number of lines added and deleted for each successfully written file.
 *   **Bun-First:** Optimized for performance using Bun APIs.
 
+## Bun-First Approach 🚀
+
+`apply-whole` is built with a Bun-first mindset, leveraging Bun's performance and APIs for:
+
+- **Optimal Performance:** Uses Bun's fast file system APIs and clipboard access
+- **Modern JavaScript/TypeScript:** Takes advantage of the latest language features
+- **Functional Programming:** Follows a functional approach with immutable data structures
+- **Minimal Dependencies:** Relies mostly on built-in capabilities
+
+While the package works with Node.js, we recommend using Bun for the best experience and performance.
+
 ## Installation 📦
 
 ```bash
-bun add -g apply-whole # Or your preferred package manager like npm i -g apply-whole
+# Using Bun (recommended)
+bun add -g apply-whole
+
+# Using npm
+npm install -g apply-whole
+
+# Using pnpm
+pnpm add -g apply-whole
+
+# Using yarn
+yarn global add apply-whole
 ```
 
-*(Assumes global installation for direct CLI usage. Adjust if installing locally.)*
+After installation, you'll have the `apply` command available globally.
+
+## Building from Source
+
+To build from source:
+
+```bash
+# Clone the repository 
+git clone https://github.com/yourusername/apply-whole.git
+cd apply-whole
+
+# Install dependencies
+bun install
+
+# Build the package
+bun run build
+
+# Link for development
+bun link
+```
 
 ## Usage 🛠️
 

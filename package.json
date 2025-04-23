@@ -1,53 +1,47 @@
 {
   "name": "apply-whole",
-  "version": "1.0.0",
-  "description": "A blazing fast CLI tool to extract specially formatted code blocks from markdown and write them to your filesystem",
+  "version": "0.1.0",
+  "description": "A blazing fast CLI tool to extract code blocks from markdown and write them to your filesystem",
   "type": "module",
   "module": "dist/index.js",
   "main": "dist/index.js",
-  "exports": {
-    ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
-    }
-  },
-  "types": "dist/index.d.ts",
   "bin": {
-    "apply": "./dist/cli.js"
+    "apply": "dist/cli.js"
   },
   "files": [
-    "dist",
-    "src",
-    "LICENSE"
+    "dist"
   ],
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target node",
-    "build:types": "tsc --emitDeclarationOnly --outDir dist",
-    "prepublishOnly": "bun run build && bun run build:types",
-    "start": "bun run src/index.ts",
-    "test": "bun test"
+    "build": "bun build --minify --target bun --outdir dist ./index.ts ./src/cli.ts",
+    "postbuild": "node -e \"try { require('fs').chmodSync('./dist/cli.js', '755') } catch (e) { console.log('Note: chmod not available on Windows') }\"",
+    "prepublishOnly": "bun run build",
+    "start": "bun run index.ts",
+    "dev": "bun run --watch index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [
+    "bun",
     "markdown",
-    "code-blocks",
     "cli",
-    "extract",
-    "filesystem",
-    "bun"
+    "code-blocks",
+    "apply",
+    "patch"
   ],
   "author": "",
   "license": "MIT",
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/apply-whole"
+  },
   "devDependencies": {
     "@types/bun": "latest",
-    "typescript": "^5"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
+    "typescript": "^5.0.0"
   },
   "dependencies": {
     "chalk": "^5.4.1"
-  },
-  "engines": {
-    "bun": ">=1.0.0"
   }
 }

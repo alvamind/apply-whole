@@ -1,15 +1,18 @@
-#!/usr/bin/env node
-
-import { createDefaultDependencies, runApply } from "./core";
+#!/usr/bin/env bun
+import { runApply, createDefaultDependencies } from "./core";
 
 const main = async (): Promise<void> => {
+  const deps = await createDefaultDependencies();
   try {
-    const deps = await createDefaultDependencies();
     await runApply(deps, process.argv);
-  } catch (error) {
-    console.error("Unexpected error occurred:", error instanceof Error ? error.message : String(error));
-    process.exit(1);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    deps.error(deps.chalk.red(`Unhandled error: ${errorMessage}`));
+    deps.exit(1);
   }
 };
 
-main(); 
+// Only run this if it's called directly
+if (import.meta.path === Bun.main) {
+  await main();
+} 
