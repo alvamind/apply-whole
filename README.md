@@ -51,7 +51,7 @@ To build from source:
 
 ```bash
 # Clone the repository 
-git clone https://github.com/yourusername/apply-whole.git
+git clone https://github.com/alvamind/apply-whole.git
 cd apply-whole
 
 # Install dependencies
