@@ -1,6 +1,6 @@
 {
   "name": "apply-whole",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "A blazing fast CLI tool to extract code blocks from markdown and write them to your filesystem",
   "type": "module",
   "module": "dist/index.js",
