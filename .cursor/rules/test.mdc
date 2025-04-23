@@ -1,0 +1,17 @@
+---
+description: 
+globs: *.test.ts,*test.ts
+alwaysApply: false
+---
+test.md rules below
+
+1. while addressing fail tests, always have a mindset that there must be main program core error to fix rather than awaken test expectations!!
+2. Test cases should be isolated and clean no leftover even on sigterm. even the file creation and cli operation is managed by test files
+3. Implement e2e tests for all features with real implementation
+4. Create challenging, thorough test cases that fully verify implementation
+5. Test cases should match expected requirements
+6. Do not create/make test of tricks, simulation, stub, mock, etc. you should produce code of real algorithm
+7. Do not create any new file for helper,script etc. just do what prompted.
+8. Should not create another files other than these:
+   - `test/e2e` and`test/unit` - tests files. FOLLOW test.md rules
+   - `test/utils.ts - test utils to be used in test files. 
