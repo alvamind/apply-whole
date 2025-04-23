@@ -1,4 +1,3 @@
-// src/types.ts
 import type { ChalkInstance } from "chalk";
 import type { ParseArgsConfig } from "node:util";
 
@@ -51,10 +50,19 @@ export interface LineChanges {
     readonly linesDeleted: number;
 }
 
+// Represents the state *before* a write operation
+export interface WriteOperation {
+  readonly block: CodeBlock;
+  readonly originalContent: FileContent | null; // Content before write, null if didn't exist
+  readonly originallyExisted: boolean;         // Did the file exist before the write attempt?
+}
+
+// Represents the outcome *after* a write operation attempt
 export interface WriteResult extends LineChanges {
   readonly filePath: FilePath;
   readonly success: boolean;
   readonly error?: Error;
+  // Removed originalContent and originallyExisted from here
 }
 
 export interface ProcessingStats extends LineChanges {
@@ -68,6 +76,7 @@ export interface ProcessingStats extends LineChanges {
 
 export interface ApplyResult {
   readonly writeResults: ReadonlyArray<WriteResult>;
+  readonly originalStates: ReadonlyArray<WriteOperation>; // Holds pre-write info needed for revert
   readonly stats: ProcessingStats;
 }
 
@@ -84,4 +93,6 @@ export interface Dependencies {
   readonly chalk: ChalkInstance;
   readonly parseArgs: <T extends ParseArgsConfig>(config: T) => ParsedArgsValues;
   readonly hrtime: (time?: Nanoseconds) => Nanoseconds;
+  readonly prompt: (message: string) => Promise<string>; // Added for user confirmation
+  readonly unlink: (path: FilePath) => Promise<void>;   // Added for reverting newly created files
 }

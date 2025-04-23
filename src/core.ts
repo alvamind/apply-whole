@@ -2,6 +2,7 @@
 import {
   DEFAULT_ENCODING,
   CODE_BLOCK_START_LINE_REGEX,
+  PATH_ON_NEXT_LINE_REGEX,
   ANY_CODE_BLOCK_DELIMITER_REGEX,
   HELP_MESSAGE,
   ARGS_CONFIG,
@@ -124,50 +125,78 @@ const analyzeMarkdownContent = (
     const lines = markdownContent.split(NEWLINE_REGEX);
     const issues: AnalysisIssue[] = [];
     const validBlocks: CodeBlock[] = [];
+    let inCodeBlock = false;
+    let currentBlockStart = 0;
+    let currentBlockPath = "";
+    let contentStart = 0;
 
-    const delimiterLines: DelimiterLine[] = lines.reduce(
-        (acc: DelimiterLine[], lineContent, index) =>
-            ANY_CODE_BLOCK_DELIMITER_REGEX.test(lineContent.trimStart())
-                ? [...acc, { lineNumber: index + 1, content: lineContent }]
-                : acc,
-        []
-    );
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i] || ""; // Handle potentially undefined lines
+        const trimmedLine = line.trimStart();
 
-    if (delimiterLines.length % 2 !== 0) {
-        const lastDelimiter = delimiterLines[delimiterLines.length - 1];
-        if (lastDelimiter) {
-            issues.push({
-                lineNumber: lastDelimiter.lineNumber,
-                lineContent: lastDelimiter.content,
-                message: "Found an odd number of '```' delimiters. Blocks may be incomplete or incorrectly matched.",
-            });
+        // Check if this line starts or ends a code block
+        if (ANY_CODE_BLOCK_DELIMITER_REGEX.test(trimmedLine)) {
+            if (!inCodeBlock) {
+                // Start of a code block
+                inCodeBlock = true;
+                currentBlockStart = i;
+                
+                // Check if path is on the same line as the opening delimiter
+                const match = trimmedLine.match(CODE_BLOCK_START_LINE_REGEX);
+                if (match?.groups?.['path']) {
+                    currentBlockPath = match.groups['path'].trim();
+                    contentStart = i + 1; // Content starts on the next line
+                } else if (i + 1 < lines.length) {
+                    // Check if path is on the next line
+                    const nextLine = lines[i + 1] || "";
+                    const pathMatch = nextLine.match(PATH_ON_NEXT_LINE_REGEX);
+                    if (pathMatch?.groups?.['path']) {
+                        currentBlockPath = pathMatch.groups['path'].trim();
+                        contentStart = i + 2; // Content starts two lines after
+                    } else {
+                        // No path found
+                        currentBlockPath = "";
+                    }
+                } else {
+                    // Last line of the file can't have a path on next line
+                    currentBlockPath = "";
+                }
+            } else {
+                // End of a code block
+                inCodeBlock = false;
+                
+                if (currentBlockPath) {
+                    // We have a valid path, extract content
+                    const contentEnd = i;
+                    const blockContent = lines.slice(contentStart, contentEnd).join('\n');
+                    
+                    validBlocks.push({
+                        filePath: currentBlockPath,
+                        fileContent: blockContent,
+                        startLineNumber: currentBlockStart + 1 // Convert to 1-indexed
+                    });
+                } else {
+                    // No valid path was found
+                    issues.push({
+                        lineNumber: currentBlockStart + 1, // Convert to 1-indexed
+                        lineContent: lines[currentBlockStart] || "",
+                        message: "Invalid code block start tag format. Expected: ```[lang] // path/to/file.ext`",
+                    });
+                }
+                
+                // Reset state
+                currentBlockPath = "";
+            }
         }
     }
-
-    for (let i = 0; i < delimiterLines.length - 1; i += 2) {
-        const startLine = delimiterLines[i];
-        const endLine = delimiterLines[i + 1];
-        if (!startLine || !endLine) continue;
-
-        const trimmedStartLineContent = startLine.content.trim();
-        const match = trimmedStartLineContent.match(CODE_BLOCK_START_LINE_REGEX);
-
-        if (!match?.groups?.['path']) {
-            issues.push({
-                lineNumber: startLine.lineNumber,
-                lineContent: startLine.content,
-                message: "Invalid code block start tag format. Expected: ```[lang] // path/to/file.ext`",
-            });
-        } else {
-            const codeContent = lines
-                .slice(startLine.lineNumber, endLine.lineNumber - 1)
-                .join('\n');
-            validBlocks.push({
-                filePath: match.groups['path'].trim(),
-                fileContent: codeContent,
-                startLineNumber: startLine.lineNumber,
-            });
-        }
+    
+    // Check if there's an unclosed code block
+    if (inCodeBlock) {
+        issues.push({
+            lineNumber: currentBlockStart + 1, // Convert to 1-indexed
+            lineContent: lines[currentBlockStart] || "",
+            message: "Found an odd number of '```' delimiters. Blocks may be incomplete or incorrectly matched.",
+        });
     }
 
     return {
@@ -246,6 +275,27 @@ const writeFiles = async (
   encoding: Encoding
 ): Promise<ApplyResult> => {
   const startTime = deps.hrtime();
+  
+  // Track the original state of each file before modifications
+  const originalStates = await Promise.all(blocks.map(async (block) => {
+    let originalContent: FileContent | null = null;
+    const fileExists = await deps.exists(block.filePath);
+    
+    if (fileExists) {
+      try {
+        originalContent = await deps.readFile(block.filePath, encoding);
+      } catch (error) {
+        // If error reading file, treat as if it doesn't exist
+        originalContent = null;
+      }
+    }
+    
+    return {
+      block,
+      originalContent,
+      originallyExisted: fileExists
+    };
+  }));
 
   const writePromises = blocks.map(block => performWrite(deps, block, encoding));
   const writeResults = await Promise.all(writePromises);
@@ -275,6 +325,7 @@ const writeFiles = async (
 
   return {
     writeResults: Object.freeze(writeResults),
+    originalStates: Object.freeze(originalStates),
     stats: finalStats
   };
 };
@@ -376,7 +427,7 @@ const runApply = async (
 const createDefaultDependencies = async (): Promise<Dependencies> => {
   const { parseArgs: nodeParseArgs } = await import("node:util");
   const { dirname: nodeDirname } = await import("node:path");
-  const { stat, mkdir: nodeMkdir } = await import("node:fs/promises");
+  const { stat, mkdir: nodeMkdir, unlink: nodeUnlink } = await import("node:fs/promises");
 
   const readFile = (filePath: FilePath, _encoding: Encoding): Promise<FileContent> =>
     Bun.file(filePath).text();
@@ -408,6 +459,22 @@ const createDefaultDependencies = async (): Promise<Dependencies> => {
       throw new Error(`Failed to read from clipboard: ${getErrorMessage(error)}`);
     }
   };
+  
+  const prompt = async (message: string): Promise<string> => {
+    process.stdout.write(message);
+    
+    return new Promise((resolve) => {
+      const onData = (data: Buffer) => {
+        resolve(data.toString().trim());
+      };
+      
+      process.stdin.once('data', onData);
+    });
+  };
+  
+  const unlink = async (path: FilePath): Promise<void> => {
+    await nodeUnlink(path);
+  };
 
   return Object.freeze({
     readFile,
@@ -419,9 +486,11 @@ const createDefaultDependencies = async (): Promise<Dependencies> => {
     log: console.log,
     error: console.error,
     exit: process.exit,
-    chalk: chalk,
+    chalk,
     parseArgs: nodeParseArgs,
     hrtime: process.hrtime,
+    prompt,
+    unlink
   });
 };
 

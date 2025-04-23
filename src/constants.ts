@@ -3,8 +3,15 @@ import type { ParseArgsConfig } from "node:util";
 import type { Encoding } from "./types";
 
 export const DEFAULT_ENCODING: Encoding = "utf-8";
+
+// Updated regex to support path on same line or next line
 export const CODE_BLOCK_START_LINE_REGEX: RegExp =
-  /^```(?:[a-z]+)?\s*\/\/\s*(?<path>[^\r\n]+)\s*$/i;
+  /^```(?:[a-z]+)?\s*(?:\/\/\s*(?<path>[^\r\n]+)\s*)?$/i;
+
+// Regex to detect if a path is on the line following the opening delimiter
+export const PATH_ON_NEXT_LINE_REGEX: RegExp =
+  /^\/\/\s*(?<path>[^\r\n]+)\s*$/;
+
 export const ANY_CODE_BLOCK_DELIMITER_REGEX: RegExp = /^```/;
 
 export const HELP_MESSAGE: string = `
