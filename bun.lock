@@ -4,7 +4,7 @@
     "": {
       "name": "apply-whole",
       "dependencies": {
-        "apply-whole": "^0.1.3",
+        "apply-whole": "^0.1.4",
         "chalk": "^5.4.1",
         "clipboardy": "^4.0.0",
       },
@@ -19,7 +19,7 @@
 
     "@types/node": ["@types/node@22.14.1", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-u0HuPQwe/dHrItgHHpmw3N2fYCR6x4ivMNbPHRkBVP4CvN+kiRrKHWk3i8tXiO/joPwXLMYvF9TTF0eqgHIuOw=="],
 
-    "apply-whole": ["apply-whole@0.1.3", "", { "dependencies": { "apply-whole": "^0.1.2", "chalk": "^5.4.1", "clipboardy": "^4.0.0" }, "bin": { "apply": "bin/apply.js" } }, "sha512-XGFx4u/e8/WF/xFaCrRd2ReDkUNaznU0w2tGVfDFJAYSdeCBfiBKMuYzzed5DzX9YbM6nm/tg6W24h9s20KaDA=="],
+    "apply-whole": ["apply-whole@0.1.4", "", { "dependencies": { "apply-whole": "^0.1.3", "chalk": "^5.4.1", "clipboardy": "^4.0.0" }, "bin": { "apply": "bin/apply.js" } }, "sha512-A4UqHXxqltvgHboIdRANJo1cyC7hF1gZ5+6hafLy/a1J6g+gxAq+89w4G6G4/krQqcyFrHjhvDTLiAFCviHo1Q=="],
 
     "bun-types": ["bun-types@1.2.10", "", { "dependencies": { "@types/node": "*" } }, "sha512-b5ITZMnVdf3m1gMvJHG+gIfeJHiQPJak0f7925Hxu6ZN5VKA8AGy4GZ4lM+Xkn6jtWxg5S3ldWvfmXdvnkp3GQ=="],
 

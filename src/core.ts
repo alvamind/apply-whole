@@ -1,4 +1,3 @@
-// src/core.ts
 import {
   DEFAULT_ENCODING,
   CODE_BLOCK_START_LINE_REGEX,
@@ -32,6 +31,14 @@ import type {
   LineChanges,
   ProcessingStats,
   WriteOperation,
+  ErrorExitDeps,
+  CliDeps,
+  InputDeps,
+  FormatDeps,
+  DirectoryDeps,
+  WriteFileDeps,
+  WriteProcessDeps,
+  RevertDeps,
 } from "./types";
 import chalk from "chalk";
 import clipboardy from "clipboardy";
@@ -43,7 +50,7 @@ const getErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
 const reportErrorAndExit = (
-  deps: Pick<Dependencies, "error" | "exit" | "chalk">,
+  deps: ErrorExitDeps,
   message: string,
   exitCode: typeof ExitCodes[keyof typeof ExitCodes],
   helpText?: string
@@ -56,7 +63,7 @@ const reportErrorAndExit = (
 };
 
 const parseCliArguments = (
-  deps: Pick<Dependencies, "parseArgs" | "error" | "log" | "exit" | "chalk">,
+  deps: CliDeps,
   argv: ReadonlyArray<string>
 ): ParsedArgsResult => {
   try {
@@ -69,11 +76,9 @@ const parseCliArguments = (
       return deps.exit(ExitCodes.SUCCESS);
     }
 
-    const useClipboard = !inputFile;
-
     return {
       inputFile,
-      useClipboard,
+      useClipboard: !inputFile,
       showHelp: false,
     };
   } catch (err: unknown) {
@@ -87,7 +92,7 @@ const parseCliArguments = (
 };
 
 const getInputContent = async (
-  deps: Pick<Dependencies, "readFile" | "readClipboard" | "chalk" | "error" | "exit">,
+  deps: InputDeps,
   args: ParsedArgsResult,
   encoding: Encoding
 ): Promise<FileContent> => {
@@ -137,70 +142,55 @@ const analyzeMarkdownContent = (
     let contentStart = 0;
 
     for (let i = 0; i < lines.length; i++) {
-        const line = lines[i] || ""; // Handle potentially undefined lines
+        const line = lines[i] ?? "";
         const trimmedLine = line.trimStart();
 
-        // Check if this line starts or ends a code block
         if (ANY_CODE_BLOCK_DELIMITER_REGEX.test(trimmedLine)) {
             if (!inCodeBlock) {
-                // Start of a code block
                 inCodeBlock = true;
                 currentBlockStart = i;
-                
-                // Check if path is on the same line as the opening delimiter
                 const match = trimmedLine.match(CODE_BLOCK_START_LINE_REGEX);
                 if (match?.groups?.['path']) {
                     currentBlockPath = match.groups['path'].trim();
-                    contentStart = i + 1; // Content starts on the next line
+                    contentStart = i + 1;
                 } else if (i + 1 < lines.length) {
-                    // Check if path is on the next line
-                    const nextLine = lines[i + 1] || "";
+                    const nextLine = lines[i + 1] ?? "";
                     const pathMatch = nextLine.match(PATH_ON_NEXT_LINE_REGEX);
                     if (pathMatch?.groups?.['path']) {
                         currentBlockPath = pathMatch.groups['path'].trim();
-                        contentStart = i + 2; // Content starts two lines after
+                        contentStart = i + 2;
                     } else {
-                        // No path found
                         currentBlockPath = "";
                     }
                 } else {
-                    // Last line of the file can't have a path on next line
                     currentBlockPath = "";
                 }
             } else {
-                // End of a code block
                 inCodeBlock = false;
-                
                 if (currentBlockPath) {
-                    // We have a valid path, extract content
                     const contentEnd = i;
                     const blockContent = lines.slice(contentStart, contentEnd).join('\n');
-                    
                     validBlocks.push({
                         filePath: currentBlockPath,
                         fileContent: blockContent,
-                        startLineNumber: currentBlockStart + 1 // Convert to 1-indexed
+                        startLineNumber: currentBlockStart + 1
                     });
                 } else {
-                    // No valid path was found
                     issues.push({
-                        lineNumber: currentBlockStart + 1, // Convert to 1-indexed
-                        lineContent: lines[currentBlockStart] || "",
+                        lineNumber: currentBlockStart + 1,
+                        lineContent: lines[currentBlockStart] ?? "",
                         message: "Invalid code block start tag format. Expected: ```[lang] // path/to/file.ext`",
                     });
                 }
-                
-                // Reset state
                 currentBlockPath = "";
             }
         }
     }
-    
-    // Check if there's an unclosed code block
+
     if (inCodeBlock) {
         issues.push({
-            lineNumber: currentBlockStart + 1, // Convert to 1-indexed
-            lineContent: lines[currentBlockStart] || "",
+            lineNumber: currentBlockStart + 1,
+            lineContent: lines[currentBlockStart] ?? "",
             message: "Found an odd number of '```' delimiters. Blocks may be incomplete or incorrectly matched.",
         });
     }
@@ -212,7 +202,7 @@ const analyzeMarkdownContent = (
 };
 
 const ensureDirectoryExists = async (
-  deps: Pick<Dependencies, "exists" | "mkdir" | "dirname">,
+  deps: DirectoryDeps,
   filePath: FilePath
 ): Promise<void> => {
   const dir = deps.dirname(filePath);
@@ -230,39 +220,29 @@ const calculateLineChanges = (
 ): LineChanges => {
     const oldLines = oldContent?.split(NEWLINE_REGEX) ?? [];
     const newLines = newContent.split(NEWLINE_REGEX);
-
-    // Simple line count difference for basic stats
-    const linesAdded = Math.max(0, newLines.length - oldLines.length);
-    const linesDeleted = Math.max(0, oldLines.length - newLines.length);
-
-    // Note: This is a basic count diff, not a true diff algorithm.
-    // For more accurate add/delete based on content matching, a diff library would be needed.
-    // However, sticking to core implementation per requirements.
-    return { linesAdded, linesDeleted };
+    return {
+        linesAdded: Math.max(0, newLines.length - oldLines.length),
+        linesDeleted: Math.max(0, oldLines.length - newLines.length)
+    };
 };
 
 const performWrite = async (
-  deps: Pick<Dependencies, "writeFile" | "readFile" | "exists" | "mkdir" | "dirname">,
+  deps: WriteFileDeps,
   block: CodeBlock,
   encoding: Encoding
 ): Promise<WriteResult> => {
   let oldContent: FileContent | null = null;
-  let lineChanges: LineChanges = { linesAdded: 0, linesDeleted: 0 };
   try {
     await ensureDirectoryExists(deps, block.filePath);
-
     try {
       oldContent = await deps.readFile(block.filePath, encoding);
     } catch (readError: unknown) {
-      // Ignore ENOENT (file not found), treat as empty old content
       if (!(readError instanceof Error && 'code' in readError && readError.code === 'ENOENT')) {
-        throw readError; // Re-throw other read errors
+        throw readError;
       }
     }
-
     await deps.writeFile(block.filePath, block.fileContent, encoding);
-    lineChanges = calculateLineChanges(oldContent, block.fileContent);
-
+    const lineChanges = calculateLineChanges(oldContent, block.fileContent);
     return { filePath: block.filePath, success: true, ...lineChanges };
   } catch (error: unknown) {
     return {
@@ -276,48 +256,32 @@ const performWrite = async (
 };
 
 const writeFiles = async (
-  deps: Pick<Dependencies, "writeFile" | "readFile" | "exists" | "mkdir" | "dirname" | "hrtime">,
+  deps: WriteProcessDeps,
   blocks: ReadonlyArray<CodeBlock>,
   encoding: Encoding
 ): Promise<ApplyResult> => {
   const startTime = deps.hrtime();
-  
-  // Track the original state of each file before modifications
+
   const originalStates = await Promise.all(blocks.map(async (block) => {
     let originalContent: FileContent | null = null;
     const fileExists = await deps.exists(block.filePath);
-    
     if (fileExists) {
       try {
         originalContent = await deps.readFile(block.filePath, encoding);
       } catch (error) {
-        // If error reading file, treat as if it doesn't exist
         originalContent = null;
       }
     }
-    
-    return {
-      block,
-      originalContent,
-      originallyExisted: fileExists
-    };
+    return { block, originalContent, originallyExisted: fileExists };
   }));
 
-  const writePromises = blocks.map(block => performWrite(deps, block, encoding));
-  const writeResults = await Promise.all(writePromises);
-
+  const writeResults = await Promise.all(blocks.map(block => performWrite(deps, block, encoding)));
   const endTime = deps.hrtime(startTime);
   const durationMs = nanosecondsToMilliseconds(endTime);
 
   const initialStats: ProcessingStats = {
-      totalAttempted: blocks.length,
-      successfulWrites: 0,
-      failedWrites: 0,
-      totalLinesAdded: 0,
-      totalLinesDeleted: 0,
-      linesAdded: 0,
-      linesDeleted: 0,
-      durationMs,
+      totalAttempted: blocks.length, successfulWrites: 0, failedWrites: 0,
+      totalLinesAdded: 0, totalLinesDeleted: 0, linesAdded: 0, linesDeleted: 0, durationMs,
   };
 
   const finalStats = writeResults.reduce((stats, result) => ({
@@ -328,7 +292,6 @@ const writeFiles = async (
       totalLinesDeleted: stats.totalLinesDeleted + result.linesDeleted,
   }), initialStats);
 
-
   return {
     writeResults: Object.freeze(writeResults),
     originalStates: Object.freeze(originalStates),
@@ -337,7 +300,7 @@ const writeFiles = async (
 };
 
 const formatAnalysisIssues = (
-    deps: Pick<Dependencies, "chalk">,
+    deps: FormatDeps,
     issues: ReadonlyArray<AnalysisIssue>
 ): string[] => {
   return issues.map(
@@ -347,7 +310,7 @@ const formatAnalysisIssues = (
 };
 
 const formatWriteResults = (
-  deps: Pick<Dependencies, "chalk">,
+  deps: FormatDeps,
   { writeResults, stats }: ApplyResult
 ): string => {
   const resultLines: string[] = writeResults.map((result) => {
@@ -371,18 +334,18 @@ const formatWriteResults = (
     )}, ${deps.chalk.red(`${stats.failedWrites} failed`)})`,
     `Lines changed: ${deps.chalk.green(`+${stats.totalLinesAdded}`)}, ${deps.chalk.red(`-${stats.totalLinesDeleted}`)}`,
     stats.durationMs > 0 ? `Completed in ${duration}ms` : "",
-  ].filter(Boolean); // Remove empty strings
+  ].filter(Boolean);
 
   return [...resultLines, ...summary].join("\n");
 };
 
 const revertChanges = async (
-  deps: Pick<Dependencies, "writeFile" | "unlink" | "log" | "error" | "chalk">,
+  deps: RevertDeps,
   successfulWriteResults: ReadonlyArray<WriteResult>,
   originalStates: ReadonlyArray<WriteOperation>,
   encoding: Encoding
 ): Promise<boolean> => {
-  deps.error(deps.chalk.yellow(REVERTING_MESSAGE)); // Use error stream for progress like other steps
+  deps.error(deps.chalk.yellow(REVERTING_MESSAGE));
   let allRevertedSuccessfully = true;
 
   const revertPromises = successfulWriteResults.map(async (result) => {
@@ -392,20 +355,16 @@ const revertChanges = async (
       allRevertedSuccessfully = false;
       return;
     }
-
     try {
       if (originalState.originallyExisted) {
         if (originalState.originalContent !== null) {
           await deps.writeFile(result.filePath, originalState.originalContent, encoding);
           deps.log(REVERT_ACTION_MESSAGE(result.filePath, "restored"));
         } else {
-          // File existed but couldn't be read, or was empty. 
-          // For safety, delete the file since we can't restore its content
           await deps.unlink(result.filePath);
           deps.log(REVERT_ACTION_MESSAGE(result.filePath, "deleted (original content was null/unreadable)"));
         }
       } else {
-        // File did not exist originally, so delete the one we created
         await deps.unlink(result.filePath);
         deps.log(REVERT_ACTION_MESSAGE(result.filePath, "deleted"));
       }
@@ -419,6 +378,44 @@ const revertChanges = async (
   return allRevertedSuccessfully;
 };
 
+const confirmAndPotentiallyRevert = async (
+    deps: Dependencies,
+    applyResult: ApplyResult,
+    encoding: Encoding
+): Promise<{ shouldKeepChanges: boolean; finalExitCode: number }> => {
+    const successfulWrites = applyResult.writeResults.filter(r => r.success);
+    if (successfulWrites.length === 0) {
+        return { shouldKeepChanges: false, finalExitCode: applyResult.stats.failedWrites > 0 ? ExitCodes.ERROR : ExitCodes.SUCCESS };
+    }
+
+    const isTestEnvironment = process.env['BUN_APPLY_AUTO_YES'] === 'true';
+    let shouldKeepChanges = true;
+    if (!isTestEnvironment) {
+        const response = await deps.prompt(deps.chalk.yellow(CONFIRMATION_PROMPT));
+        const confirmation = response.toLowerCase().trim();
+        shouldKeepChanges = confirmation === 'y' || confirmation === 'yes';
+    }
+
+    if (shouldKeepChanges) {
+        deps.log(deps.chalk.green(CHANGES_APPLIED_MESSAGE));
+        return { shouldKeepChanges: true, finalExitCode: applyResult.stats.failedWrites > 0 ? ExitCodes.ERROR : ExitCodes.SUCCESS };
+    } else {
+        const revertSuccessful = await revertChanges(
+            deps,
+            successfulWrites,
+            applyResult.originalStates,
+            encoding
+        );
+        if (revertSuccessful) {
+            deps.log(deps.chalk.green(CHANGES_REVERTED_MESSAGE));
+            return { shouldKeepChanges: false, finalExitCode: ExitCodes.SUCCESS }; // Revert success overrides prior write errors for final status
+        } else {
+            deps.error(deps.chalk.red("Errors occurred during revert operation. Filesystem may be in an inconsistent state."));
+            return { shouldKeepChanges: false, finalExitCode: ExitCodes.ERROR }; // Revert failure is an error
+        }
+    }
+};
+
 const runApply = async (
   deps: Dependencies,
   argv: ReadonlyArray<string>
@@ -427,14 +424,13 @@ const runApply = async (
   try {
     const args = parseCliArguments(deps, argv);
     const content = await getInputContent(deps, args, DEFAULT_ENCODING);
-
     deps.error(deps.chalk.blue("Analyzing markdown content..."));
     const { validBlocks, issues } = analyzeMarkdownContent(content);
 
     if (issues.length > 0) {
       deps.error(deps.chalk.yellow("\nAnalysis Issues Found:"));
       formatAnalysisIssues(deps, issues).forEach(issue => deps.error(issue));
-      finalExitCode = ExitCodes.ERROR; // Mark potential failure even if some blocks are valid
+      finalExitCode = ExitCodes.ERROR;
       if (validBlocks.length === 0) {
          deps.error(deps.chalk.red("\nNo valid code blocks were extracted due to analysis issues."));
          return deps.exit(finalExitCode);
@@ -453,46 +449,14 @@ const runApply = async (
         const applyResult = await writeFiles(deps, validBlocks, DEFAULT_ENCODING);
         deps.log(formatWriteResults(deps, applyResult)); // Use log for final results
 
-        if (applyResult.stats.failedWrites > 0) {
-            finalExitCode = ExitCodes.ERROR; // Mark failure if any write failed
-        }
-        
-        // Proceed to confirmation only if there were successful writes
-        const successfulWrites = applyResult.writeResults.filter(r => r.success);
-        if (successfulWrites.length > 0) {
-            // Check for auto-apply environment variable or stdin input
-            const isTestEnvironment = process.env['BUN_APPLY_AUTO_YES'] === 'true';
-            
-            // Skip prompting in test environment
-            let shouldKeepChanges = true;
-            if (!isTestEnvironment) {
-                const response = await deps.prompt(deps.chalk.yellow(CONFIRMATION_PROMPT));
-                const confirmation = response.toLowerCase().trim();
-                shouldKeepChanges = confirmation === 'y' || confirmation === 'yes';
-            }
-            
-            if (shouldKeepChanges) {
-                deps.log(deps.chalk.green(CHANGES_APPLIED_MESSAGE));
-                // Keep finalExitCode as previously determined
-            } else {
-                // User chose 'n', 'no', or anything else - revert
-                const revertSuccessful = await revertChanges(
-                    deps,
-                    successfulWrites,
-                    applyResult.originalStates,
-                    DEFAULT_ENCODING
-                );
-                
-                if (revertSuccessful) {
-                    deps.log(deps.chalk.green(CHANGES_REVERTED_MESSAGE));
-                    // Even if analysis had issues, user revert means operation completed as requested
-                    // Override previous error status if revert was clean
-                    finalExitCode = ExitCodes.SUCCESS;
-                } else {
-                    deps.error(deps.chalk.red("Errors occurred during revert operation. Filesystem may be in an inconsistent state."));
-                    finalExitCode = ExitCodes.ERROR; // Revert failed, definitely an error state
-                }
-            }
+        // Determine final exit code based on apply and potential revert
+        const confirmResult = await confirmAndPotentiallyRevert(deps, applyResult, DEFAULT_ENCODING);
+        // If there were analysis issues, always maintain the ERROR exit code
+        if (finalExitCode === ExitCodes.ERROR) {
+            // Keep the ERROR status from analysis issues regardless of apply success
+        } else {
+            // Otherwise use the exit code from confirmation/revert
+            finalExitCode = confirmResult.finalExitCode;
         }
     }
 
@@ -502,10 +466,7 @@ const runApply = async (
       deps.error(deps.chalk.green("Finished successfully."));
     }
     deps.exit(finalExitCode);
-
   } catch (err: unknown) {
-    // This catch block handles unexpected errors not caught elsewhere
-    // reportErrorAndExit is preferred for controlled exits
     deps.error(deps.chalk.red(`Unexpected error: ${getErrorMessage(err)}`));
     deps.exit(ExitCodes.ERROR);
   }
@@ -546,19 +507,14 @@ const createDefaultDependencies = async (): Promise<Dependencies> => {
       throw new Error(`Failed to read from clipboard: ${getErrorMessage(error)}`);
     }
   };
-  
+
   const prompt = async (message: string): Promise<string> => {
     process.stdout.write(message);
-    
     return new Promise((resolve) => {
-      const onData = (data: Buffer) => {
-        resolve(data.toString().trim());
-      };
-      
-      process.stdin.once('data', onData);
+      process.stdin.once('data', (data: Buffer) => resolve(data.toString().trim()));
     });
   };
-  
+
   const unlink = async (path: FilePath): Promise<void> => {
     await nodeUnlink(path);
   };
@@ -586,7 +542,6 @@ const main = async (): Promise<void> => {
   try {
     await runApply(deps, Bun.argv);
   } catch (error: unknown) {
-    // This catch should ideally not be reached if runApply handles errors properly
     deps.error(deps.chalk.red(`Unhandled error in main: ${getErrorMessage(error)}`));
     deps.exit(ExitCodes.ERROR);
   }

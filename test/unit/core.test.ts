@@ -1,29 +1,12 @@
 // test/unit/core.test.ts
 import { describe, test, expect, mock } from "bun:test";
-import type chalk from "chalk";
-import path from "node:path";
-
-// We can directly import the function we want to test
-import { 
-  analyzeMarkdownContent, 
-  writeFiles, 
-  performWrite,
-  calculateLineChanges,
-  ensureDirectoryExists,
+import chalk from "chalk";
+import type { WriteResult, CodeBlock, Nanoseconds, WriteOperation, FilePath } from "../../src/types";
+import {
+  analyzeMarkdownContent,
   revertChanges,
+  writeFiles,
 } from "../../src/core";
-import type { 
-  ApplyResult, 
-  CodeBlock, 
-  Dependencies, 
-  Encoding, 
-  ProcessingStats, 
-  WriteOperation, 
-  WriteResult, 
-  FilePath, 
-  FileContent,
-  Nanoseconds
-} from "../../src/types";
 
 describe("Core functions - analysis", () => {
   test("analyzeMarkdownContent should extract valid code blocks", () => {
@@ -238,8 +221,8 @@ describe("Core functions - reversion", () => {
       dirname: mock((path: FilePath) => {
         return path.split("/").slice(0, -1).join("/") || ".";
       }),
-      hrtime: mock((time?: Nanoseconds): Nanoseconds => {
-        return [0, 5000000] as Nanoseconds; // 5ms in nanoseconds
+      hrtime: mock((): Nanoseconds => {
+        return [1, 0]; // Always return 1 second
       }),
     };
 
@@ -281,24 +264,19 @@ describe("Core functions - reversion", () => {
   });
 
   test("revertChanges functionality works correctly", async () => {
-    // Create mock dependencies including chalk-like structure
-    const mockChalk = {
-      red: (text: string) => `RED:${text}`,
-      yellow: (text: string) => `YELLOW:${text}`,
-      green: (text: string) => `GREEN:${text}`,
-      blue: (text: string) => `BLUE:${text}`,
-      cyan: (text: string) => `CYAN:${text}`,
-      gray: (text: string) => `GRAY:${text}`,
-      dim: (text: string) => `DIM:${text}`,
-      bold: (text: string) => `BOLD:${text}`,
-    } as unknown as typeof chalk;
-    
+    // Create mock dependencies
     const mockDeps = {
-      writeFile: mock(async () => {}),
-      unlink: mock(async () => {}),
+      writeFile: mock(() => Promise.resolve()),
+      unlink: mock(() => Promise.resolve()),
       log: mock(() => {}),
       error: mock(() => {}),
-      chalk: mockChalk,
+      chalk: { 
+        green: (text: string) => text, 
+        red: (text: string) => text,
+        yellow: (text: string) => text,
+        blue: (text: string) => text,
+      } as unknown as typeof chalk,
+      exit: mock((code: number) => { throw new Error(`Exit called with code ${code}`); }) as unknown as (code: number) => never,
     };
     
     // Test data
@@ -360,6 +338,7 @@ describe("Core functions - reversion", () => {
       log: mock(() => {}),
       error: mock(() => {}),
       chalk: mockChalk,
+      exit: mock((code: number) => { throw new Error(`Exit called with code ${code}`); }) as unknown as (code: number) => never,
     };
     
     // Test data for special cases

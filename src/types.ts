@@ -50,19 +50,16 @@ export interface LineChanges {
     readonly linesDeleted: number;
 }
 
-// Represents the state *before* a write operation
 export interface WriteOperation {
   readonly block: CodeBlock;
-  readonly originalContent: FileContent | null; // Content before write, null if didn't exist
-  readonly originallyExisted: boolean;         // Did the file exist before the write attempt?
+  readonly originalContent: FileContent | null;
+  readonly originallyExisted: boolean;
 }
 
-// Represents the outcome *after* a write operation attempt
 export interface WriteResult extends LineChanges {
   readonly filePath: FilePath;
   readonly success: boolean;
   readonly error?: Error;
-  // Removed originalContent and originallyExisted from here
 }
 
 export interface ProcessingStats extends LineChanges {
@@ -70,29 +67,56 @@ export interface ProcessingStats extends LineChanges {
   readonly successfulWrites: number;
   readonly failedWrites: number;
   readonly durationMs: Milliseconds;
-  readonly totalLinesAdded: number; // Aggregate of linesAdded
-  readonly totalLinesDeleted: number; // Aggregate of linesDeleted
+  readonly totalLinesAdded: number;
+  readonly totalLinesDeleted: number;
 }
 
 export interface ApplyResult {
   readonly writeResults: ReadonlyArray<WriteResult>;
-  readonly originalStates: ReadonlyArray<WriteOperation>; // Holds pre-write info needed for revert
+  readonly originalStates: ReadonlyArray<WriteOperation>;
   readonly stats: ProcessingStats;
 }
 
-export interface Dependencies {
+// --- Base Dependencies ---
+interface FileSystemDeps {
   readonly readFile: (filePath: FilePath, encoding: Encoding) => Promise<FileContent>;
   readonly writeFile: (filePath: FilePath, content: FileContent, encoding: Encoding) => Promise<void>;
   readonly exists: (path: FilePath) => Promise<boolean>;
   readonly mkdir: (path: FilePath, options: { readonly recursive: boolean }) => Promise<void>;
   readonly dirname: (path: FilePath) => FilePath;
-  readonly readClipboard: () => Promise<FileContent>;
+  readonly unlink: (path: FilePath) => Promise<void>;
+}
+
+interface ClipboardDeps {
+   readonly readClipboard: () => Promise<FileContent>;
+}
+
+interface ConsoleDeps {
   readonly log: (message: string) => void;
   readonly error: (message: string) => void;
   readonly exit: (code: number) => never;
   readonly chalk: ChalkInstance;
+}
+
+interface ProcessDeps {
   readonly parseArgs: <T extends ParseArgsConfig>(config: T) => ParsedArgsValues;
   readonly hrtime: (time?: Nanoseconds) => Nanoseconds;
-  readonly prompt: (message: string) => Promise<string>; // Added for user confirmation
-  readonly unlink: (path: FilePath) => Promise<void>;   // Added for reverting newly created files
+  readonly prompt: (message: string) => Promise<string>;
 }
+
+// --- Combined Dependency Interface ---
+export interface Dependencies extends
+  FileSystemDeps,
+  ClipboardDeps,
+  ConsoleDeps,
+  ProcessDeps {}
+
+// --- Specific Dependency Subsets for Functions ---
+export type ErrorExitDeps = Pick<Dependencies, "error" | "exit" | "chalk">;
+export type CliDeps = Pick<Dependencies, "parseArgs" | "log"> & ErrorExitDeps;
+export type InputDeps = Pick<Dependencies, "readFile" | "readClipboard"> & ErrorExitDeps;
+export type FormatDeps = Pick<Dependencies, "chalk">;
+export type DirectoryDeps = Pick<Dependencies, "exists" | "mkdir" | "dirname">;
+export type WriteFileDeps = Pick<Dependencies, "writeFile" | "readFile"> & DirectoryDeps;
+export type WriteProcessDeps = WriteFileDeps & Pick<Dependencies, "hrtime" | "exists">;
+export type RevertDeps = Pick<Dependencies, "writeFile" | "unlink" | "log"> & ErrorExitDeps;
