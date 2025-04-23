@@ -1,4 +1,13 @@
 // src/core.ts
+import {
+  DEFAULT_ENCODING,
+  CODE_BLOCK_START_LINE_REGEX,
+  ANY_CODE_BLOCK_DELIMITER_REGEX,
+  HELP_MESSAGE,
+  ARGS_CONFIG,
+  ExitCodes,
+  NEWLINE_REGEX,
+} from "./constants";
 import type {
   FilePath,
   FileContent,
@@ -17,15 +26,8 @@ import type {
   LineChanges,
   ProcessingStats,
 } from "./types";
-import {
-  DEFAULT_ENCODING,
-  CODE_BLOCK_START_LINE_REGEX,
-  ANY_CODE_BLOCK_DELIMITER_REGEX,
-  HELP_MESSAGE,
-  ARGS_CONFIG,
-  ExitCodes,
-  NEWLINE_REGEX,
-} from "./constants";
+import chalk from "chalk";
+import clipboardy from "clipboardy";
 
 const nanosecondsToMilliseconds = (diff: Nanoseconds): Milliseconds =>
   (diff[0] * 1e9 + diff[1]) / 1e6;
@@ -110,7 +112,7 @@ const getInputContent = async (
     if (args.inputFile && specificError.includes('ENOENT')) {
       hint = deps.chalk.yellow(`Hint: Ensure the file '${args.inputFile}' exists.`);
     } else if (args.useClipboard) {
-      hint = deps.chalk.yellow(`Hint: Ensure clipboard access is allowed and it contains text.`);
+      hint = deps.chalk.yellow(`Hint: Ensure system clipboard access is allowed and it contains text.\nAlternatively, use the '-i <file>' flag to specify an input file instead of using clipboard.`);
     }
     return reportErrorAndExit(deps, `${baseMsg}: ${specificError}`, ExitCodes.ERROR, hint || undefined);
   }
@@ -372,7 +374,6 @@ const runApply = async (
 };
 
 const createDefaultDependencies = async (): Promise<Dependencies> => {
-  const { default: chalk } = await import("chalk");
   const { parseArgs: nodeParseArgs } = await import("node:util");
   const { dirname: nodeDirname } = await import("node:path");
   const { stat, mkdir: nodeMkdir } = await import("node:fs/promises");
@@ -401,8 +402,7 @@ const createDefaultDependencies = async (): Promise<Dependencies> => {
 
   const readClipboard = async (): Promise<FileContent> => {
     try {
-      // @ts-expect-error Bun clipboard types might be missing/incomplete
-      const content = await Bun.clipboard.readText();
+      const content = await clipboardy.read();
       return content ?? "";
     } catch (error) {
       throw new Error(`Failed to read from clipboard: ${getErrorMessage(error)}`);
