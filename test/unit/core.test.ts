@@ -389,19 +389,34 @@ describe("Core functions - reversion", () => {
     // Verify
     expect(result).toBe(false); // Should fail due to errors
     
-    // Should attempt to unlink file with null original content
-    expect(mockDeps.unlink).toHaveBeenCalledWith("null-content.js");
+    // Case 1: File existed but content couldn't be read (null-content.js)
+    // It should NOT be deleted. It should log a warning.
+    expect(mockDeps.unlink).not.toHaveBeenCalledWith("null-content.js");
+    expect(mockDeps.error).toHaveBeenCalledWith(
+        expect.stringContaining(`Warning: Cannot revert null-content.js to its original state`)
+    );
     
-    // Should attempt to restore content for error-file.js
+    // Case 2: Reverting a modified file fails on write (error-file.js)
     expect(mockDeps.writeFile).toHaveBeenCalledWith("error-file.js", "// Original", "utf-8");
+    expect(mockDeps.error).toHaveBeenCalledWith(
+      expect.stringContaining(`Error reverting error-file.js: Write error`)
+    );
     
-    // Should attempt to delete file that didn't exist
+    // Case 3: Reverting a new file fails on delete (error-delete.js)
     expect(mockDeps.unlink).toHaveBeenCalledWith("error-delete.js");
+    expect(mockDeps.error).toHaveBeenCalledWith(
+        expect.stringContaining(`Error reverting error-delete.js: Delete error`)
+    );
+
+    // Case 4: A file written has no corresponding original state (missing-state.js)
+    expect(mockDeps.error).toHaveBeenCalledWith(
+        expect.stringContaining(`Error: Cannot find original state for missing-state.js`)
+    );
     
-    // Should log errors for the problematic files
-    expect(mockDeps.error).toHaveBeenCalledTimes(5); // Includes additional messages now
+    // In total, 4 operations should cause an error/warning log.
+    expect(mockDeps.error).toHaveBeenCalledTimes(4);
   });
 });
 
 // For helper functions and formatters, we'll need to create a separate test file
-// as they appear to be internal to the module and not exported 
+// as they appear to be internal to the module and not exported

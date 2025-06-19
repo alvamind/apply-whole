@@ -4,6 +4,7 @@ import { setupTestEnvironment } from "../utils";
 import type { TestEnvironment } from "../utils";
 import { ExitCodes } from "../../src/constants";
 import { join } from 'node:path';
+import { mkdir } from 'node:fs/promises';
 
 describe("bun apply E2E tests", () => {
   let env: TestEnvironment | null = null;
@@ -364,5 +365,56 @@ console.log('new file');
       
       // Verify the new file was deleted during reversion
       expect(await fileExists("new-file.js")).toBe(false);
+    });
+
+    test("revert should clean up newly created empty directories", async () => {
+      const { createInputFile, runCommand, fileExists } = getEnv();
+      
+      const markdown = `
+\`\`\`text // new/deep/dir/file.txt
+Hello there
+\`\`\`
+      `;
+      const inputPath = await createInputFile(markdown);
+      
+      const { stdout } = await runCommand(["-i", inputPath], "n\n");
+      
+      expect(stdout).toContain("Changes reverted by user");
+      
+      // Verify file and all newly created parent directories are deleted
+      expect(await fileExists("new/deep/dir/file.txt")).toBe(false);
+      expect(await fileExists("new/deep/dir")).toBe(false);
+      expect(await fileExists("new/deep")).toBe(false);
+      expect(await fileExists("new")).toBe(false);
+    });
+
+    test("revert should not clean up directories that still contain other files", async () => {
+      const { tempDir, createInputFile, runCommand, fileExists } = getEnv();
+      const sharedDirPath = "shared/dir";
+      const otherFilePath = join(sharedDirPath, "other.txt");
+      const newFilePathInSharedDir = join(sharedDirPath, "new-file.txt");
+
+      // 1. Create a directory with a pre-existing file.
+      await mkdir(join(tempDir, sharedDirPath), { recursive: true });
+      await Bun.write(join(tempDir, otherFilePath), "I am here to stay.");
+      
+      const markdown = `
+\`\`\`text // ${newFilePathInSharedDir}
+I am temporary.
+\`\`\`
+      `;
+      const inputPath = await createInputFile(markdown);
+      
+      // 3. Run apply and choose to revert.
+      const { stdout } = await runCommand(["-i", inputPath], "n\n");
+      
+      expect(stdout).toContain("Changes reverted by user");
+
+      // 5. Verify the new file was deleted.
+      expect(await fileExists(newFilePathInSharedDir)).toBe(false);
+
+      // 6. Verify the pre-existing file and its directory were NOT deleted.
+      expect(await fileExists(otherFilePath)).toBe(true);
+      expect(await fileExists(sharedDirPath)).toBe(true);
     });
 });

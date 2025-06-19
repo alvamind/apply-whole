@@ -306,7 +306,7 @@ const writeFiles = async (
         originalContent = null;
       }
     }
-    return { block, originalContent, originallyExisted: fileExists && originalContent !== null };
+    return { block, originalContent, originallyExisted: fileExists };
   }));
 
   const writeResults = await Promise.all(blocks.map(block => performWrite(deps, block, encoding)));
@@ -387,73 +387,70 @@ const revertChanges = async (
 ): Promise<boolean> => {
   deps.error(deps.chalk.yellow(REVERTING_MESSAGE));
   let allRevertedSuccessfully = true;
-  
-  // Keep track of directories to potentially clean up
-  const directoriesCreated: Set<string> = new Set();
+
+  // Keep track of parent directories of newly created files for cleanup.
+  const parentDirsOfNewFiles: Set<string> = new Set();
 
   for (const result of successfulWriteResults) {
-      const originalState = originalStates.find(os => os.block.filePath === result.filePath);
-      if (!originalState) {
-          deps.error(deps.chalk.red(`   Error: Cannot find original state for ${result.filePath} to revert.`));
-          allRevertedSuccessfully = false;
-          continue;
-      }
+    const originalState = originalStates.find(os => os.block.filePath === result.filePath);
+    if (!originalState) {
+      deps.error(deps.chalk.red(`   Error: Cannot find original state for ${result.filePath} to revert.`));
+      allRevertedSuccessfully = false;
+      continue;
+    }
 
-      try {
-          // If file didn't originally exist, remember its directory for cleanup
-          if (!originalState.originallyExisted) {
-              const dir = deps.dirname(result.filePath);
-              if (dir && dir !== '.' && dir !== '/') {
-                  directoriesCreated.add(dir);
-              }
-          }
-          
-          if (originalState.originallyExisted) {
-              if (originalState.originalContent !== null) {
-                  await deps.writeFile(result.filePath, originalState.originalContent, encoding);
-                  deps.log(REVERT_ACTION_MESSAGE(result.filePath, "restored"));
-              } else {
-                  try {
-                      await deps.unlink(result.filePath);
-                       deps.log(REVERT_ACTION_MESSAGE(result.filePath, "deleted (original content was null/unreadable)"));
-                  } catch (unlinkError) {
-                       deps.error(deps.chalk.red(`   Error deleting file ${result.filePath} during revert: ${getErrorMessage(unlinkError)}`));
-                       allRevertedSuccessfully = false;
-                  }
-              }
-          } else {
-              await deps.unlink(result.filePath);
-              deps.log(REVERT_ACTION_MESSAGE(result.filePath, "deleted"));
-          }
-      } catch (revertError: unknown) {
-          deps.error(deps.chalk.red(REVERT_ERROR_MESSAGE(result.filePath, getErrorMessage(revertError))));
-          allRevertedSuccessfully = false;
+    try {
+      if (originalState.originallyExisted) {
+        if (originalState.originalContent !== null) {
+          // File existed and we have its content, so restore it.
+          await deps.writeFile(result.filePath, originalState.originalContent, encoding);
+          deps.log(REVERT_ACTION_MESSAGE(result.filePath, "restored"));
+        } else {
+          // File existed, but we failed to read its original content.
+          // The file has been overwritten. Deleting it would be data loss.
+          // Warn the user that we cannot revert this specific file to its original state.
+          deps.error(deps.chalk.yellow(`   Warning: Cannot revert ${result.filePath} to its original state as it could not be read. The file has been modified.`));
+          allRevertedSuccessfully = false; // The revert is not fully successful.
+        }
+      } else {
+        // File was newly created by this tool, so we can safely delete it.
+        await deps.unlink(result.filePath);
+        deps.log(REVERT_ACTION_MESSAGE(result.filePath, "deleted"));
+
+        // Remember its parent directory for potential cleanup.
+        const dir = deps.dirname(result.filePath);
+        if (dir && dir !== '.' && dir !== '/') {
+          parentDirsOfNewFiles.add(dir);
+        }
       }
+    } catch (revertError: unknown) {
+      deps.error(deps.chalk.red(REVERT_ERROR_MESSAGE(result.filePath, getErrorMessage(revertError))));
+      allRevertedSuccessfully = false;
+    }
   }
-  
-  // Try to clean up directories that were created
-  if (directoriesCreated.size > 0) {
+
+  // Try to clean up directories that may now be empty.
+  if (parentDirsOfNewFiles.size > 0) {
+    // Convert to array and sort by depth (descending) to remove nested dirs first.
+    const directories = Array.from(parentDirsOfNewFiles)
+      .sort((a, b) => b.split('/').length - a.split('/').length);
+
+    for (const dir of directories) {
       try {
-          // Convert to array and sort by depth (descending) to remove nested dirs first
-          const directories = Array.from(directoriesCreated)
-              .sort((a, b) => b.split('/').length - a.split('/').length);
-              
-          for (const dir of directories) {
-              try {
-                  // Try to remove the directory (will only succeed if empty)
-                  await deps.rmdir(dir);
-                  deps.log(REVERT_ACTION_MESSAGE(dir, "directory removed"));
-              } catch (error) {
-                  // Ignore errors when removing directories - they might not be empty
-                  deps.error(deps.chalk.yellow(`   Note: Could not remove directory ${dir}: ${getErrorMessage(error)}`));
-              }
-          }
-      } catch (error) {
-          // Don't fail the revert process just because directory cleanup failed
-          deps.error(deps.chalk.yellow(`   Note: Error during directory cleanup: ${getErrorMessage(error)}`));
+        // Try to remove the directory. This will only succeed if it's empty.
+        // The `rmdir` dependency should be non-recursive by default.
+        await deps.rmdir(dir);
+        deps.log(REVERT_ACTION_MESSAGE(dir, "directory removed"));
+      } catch (error: unknown) {
+        // This is expected if the directory is not empty. We can silently ignore ENOTEMPTY.
+        const isNotEmptyError = error instanceof Error && 'code' in error && (error.code === 'ENOTEMPTY' || error.code === 'EEXIST');
+        if (!isNotEmptyError) {
+            deps.error(deps.chalk.yellow(`   Note: Could not remove directory ${dir}. Error: ${getErrorMessage(error)}`));
+        }
       }
+    }
   }
-  
+
   deps.error(deps.chalk.yellow(REVERTING_DONE)); // Status message
   return allRevertedSuccessfully;
 };
@@ -687,8 +684,8 @@ const createDefaultDependencies = async (): Promise<Dependencies> => {
     await nodeUnlink(path);
   };
   
-  const rmdir = async (path: FilePath): Promise<void> => {
-    await nodeRmdir(path, { recursive: true });
+  const rmdir = async (path: FilePath, options?: { readonly recursive?: boolean }): Promise<void> => {
+    await nodeRmdir(path, options);
   };
 
   // Updated Linter implementation using Bun.spawn

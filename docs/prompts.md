@@ -166,3 +166,28 @@ do 1,2,3 below without accidentally remove features;
 1. improve processing performance
 2. make the codebase more DRY less code less loc
 3. add another stat to summary and to individual files of line addition and deletion count
+
+------------------------------------------
+
+
+add test scenarios to coverage this
+
+1. Accidental File Deletion: The logic for determining if a file originally existed was flawed. If an existing file couldn't be read, it was marked as "not originally existing" and was subsequently deleted during a revert. I've corrected this to ensure revert never deletes a file that existed before the operation began, even if its original content couldn't be saved.
+
+2. Directory Cleanup: The function to remove directories was always using a "recursive delete," which could accidentally delete directories containing other, unrelated files. Additionally, the cleanup logic has been improved to only attempt to remove directories that contained newly created files and to do so non-recursively, which is much safer.
+
+while also fix 1 fail test file below 
+
+388 |
+389 |     // Verify
+390 |     expect(result).toBe(false); // Should fail due to errors
+391 |
+392 |     // Should attempt to unlink file with null original content
+393 |     expect(mockDeps.unlink).toHaveBeenCalledWith("null-content.js");
+                                  ^
+error: expect(received).toHaveBeenCalledWith(expected)
+
+Number of calls: 1
+
+      at <anonymous> (C:\Users\Realme Book\project\apply-whole\test\unit\core.test.ts:393:29)
+✗ Core functions - reversion > revertChanges handles special cases
