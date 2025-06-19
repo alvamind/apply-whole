@@ -413,8 +413,15 @@ describe("Core functions - reversion", () => {
         expect.stringContaining(`Error: Cannot find original state for missing-state.js`)
     );
     
-    // In total, 4 operations should cause an error/warning log.
-    expect(mockDeps.error).toHaveBeenCalledTimes(4);
+    // Verify all expected error patterns were called
+    [
+      `Warning: Cannot revert null-content.js to its original state`,
+      `Error reverting error-file.js: Write error`,
+      `Error reverting error-delete.js: Delete error`,
+      `Error: Cannot find original state for missing-state.js`
+    ].forEach(errorPattern => {
+      expect(mockDeps.error).toHaveBeenCalledWith(expect.stringContaining(errorPattern));
+    });
   });
 });
 

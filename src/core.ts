@@ -421,6 +421,15 @@ const revertChanges = async (
         const dir = deps.dirname(result.filePath);
         if (dir && dir !== '.' && dir !== '/') {
           parentDirsOfNewFiles.add(dir);
+          
+          // Also add all parent directories to the cleanup list
+          let currentDir = dir;
+          while (currentDir && currentDir !== '.' && currentDir !== '/') {
+            currentDir = deps.dirname(currentDir);
+            if (currentDir && currentDir !== '.' && currentDir !== '/') {
+              parentDirsOfNewFiles.add(currentDir);
+            }
+          }
         }
       }
     } catch (revertError: unknown) {
@@ -437,15 +446,29 @@ const revertChanges = async (
 
     for (const dir of directories) {
       try {
-        // Try to remove the directory. This will only succeed if it's empty.
-        // The `rmdir` dependency should be non-recursive by default.
+        // Check if directory exists first
+        const dirExists = await deps.exists(dir);
+        if (!dirExists) {
+          // Directory already gone, nothing to do
+          continue;
+        }
+
+        // Check if directory is truly empty before attempting to remove it
+        const dirContents = await deps.readdir(dir);
+        
+        // If directory is not empty, leave it alone
+        if (dirContents && dirContents.length > 0) {
+          continue;
+        }
+        
+        // Only remove if directory is empty
         await deps.rmdir(dir);
         deps.log(REVERT_ACTION_MESSAGE(dir, "directory removed"));
       } catch (error: unknown) {
-        // This is expected if the directory is not empty. We can silently ignore ENOTEMPTY.
-        const isNotEmptyError = error instanceof Error && 'code' in error && (error.code === 'ENOTEMPTY' || error.code === 'EEXIST');
-        if (!isNotEmptyError) {
-            deps.error(deps.chalk.yellow(`   Note: Could not remove directory ${dir}. Error: ${getErrorMessage(error)}`));
+        // Skip any errors related to directory operations
+        const errorMessage = getErrorMessage(error);
+        if (!errorMessage.includes('ENOENT')) { // Only log if it's not a "not found" error
+          deps.error(deps.chalk.yellow(`   Note: Could not clean up directory ${dir}. Error: ${errorMessage}`));
         }
       }
     }
@@ -573,11 +596,11 @@ const runApply = async (
       analysisHadIssues = true;
       deps.error(deps.chalk.yellow("\nAnalysis Issues Found:"));
       formatAnalysisIssues(deps, issues).forEach(issue => deps.error(issue));
-      finalExitCode = ExitCodes.ERROR; // Mark exit code as error due to analysis issues
+      // Only set exit code to ERROR if we don't have valid blocks
       if (validBlocks.length === 0) {
          deps.error(deps.chalk.red("\nNo valid code blocks extracted due to analysis issues. Aborting operation."));
-         // No changes applied, exit early
-         return deps.exit(finalExitCode);
+         // No changes applied, exit early with error
+         return deps.exit(ExitCodes.ERROR);
       }
       deps.error(deps.chalk.yellow("\nAttempting to process any valid blocks found despite issues..."));
     } else if (validBlocks.length > 0) {
@@ -597,13 +620,8 @@ const runApply = async (
         const confirmResult = await confirmAndPotentiallyRevert(deps, applyResult, DEFAULT_ENCODING, args.skipLinter, initialLintResult);
         changesAppliedOrReverted = true; // An action was taken or reverted
 
-        // Update finalExitCode based on confirmation/revert result, but keep ERROR if analysis had issues
-        if (finalExitCode !== ExitCodes.ERROR) {
-            finalExitCode = confirmResult.finalExitCode;
-        } else if (confirmResult.finalExitCode === ExitCodes.ERROR) {
-            // If confirmation/revert also failed, ensure exit code remains ERROR
-            finalExitCode = ExitCodes.ERROR;
-        }
+        // Update finalExitCode based on confirmation/revert result
+        finalExitCode = confirmResult.finalExitCode;
     }
 
     // --- Final Status Message ---
@@ -611,11 +629,14 @@ const runApply = async (
     // If no action was taken (no valid blocks or analysis failure with no blocks), we just report the initial state.
     if (finalExitCode === ExitCodes.ERROR) {
       deps.error(deps.chalk.red(`Finished with issues.`));
+    } else if (analysisHadIssues) {
+      // If we had analysis issues but all operations succeeded, report mixed status
+      deps.error(deps.chalk.yellow("Finished with some analysis issues, but all operations completed."));
     } else if (!changesAppliedOrReverted && !analysisHadIssues) {
-        deps.error(deps.chalk.blue("Finished. No changes were applied or needed."));
+      deps.error(deps.chalk.blue("Finished. No changes were applied or needed."));
     } else {
-        // Success includes successful apply or successful revert
-        deps.error(deps.chalk.green("Finished successfully."));
+      // Success includes successful apply or successful revert
+      deps.error(deps.chalk.green("Finished successfully."));
     }
     deps.exit(finalExitCode);
 
@@ -628,9 +649,15 @@ const runApply = async (
 };
 
 const createDefaultDependencies = async (): Promise<Dependencies> => {
-  const { parseArgs: nodeParseArgs } = await import("node:util");
-  const { dirname: nodeDirname } = await import("node:path");
-  const { stat, mkdir: nodeMkdir, unlink: nodeUnlink, rmdir: nodeRmdir } = await import("node:fs/promises");
+  const { dirname: nodeDirname, parseArgs: nodeParseArgs, unlink: nodeUnlink, rmdir: nodeRmdir, readdir: nodeReaddir } = await import("node:path").then(
+    async () => ({
+      dirname: (await import("node:path")).dirname,
+      parseArgs: (await import("node:util")).parseArgs,
+      unlink: (await import("node:fs/promises")).unlink,
+      rmdir: (await import("node:fs/promises")).rmdir,
+      readdir: (await import("node:fs/promises")).readdir,
+    })
+  );
 
   const readFile = (filePath: FilePath, _encoding: Encoding): Promise<FileContent> =>
     Bun.file(filePath).text();
@@ -639,44 +666,60 @@ const createDefaultDependencies = async (): Promise<Dependencies> => {
     Bun.write(filePath, content).then(() => {});
 
   const exists = async (path: FilePath): Promise<boolean> => {
-      try {
-          await stat(path);
-          return true;
-      } catch (error: unknown) {
-          if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-              return false;
-          }
-          throw error;
+    try {
+      const { stat } = await import('node:fs/promises');
+      await stat(path);
+      return true;
+    } catch (e) {
+      // If it doesn't exist (ENOENT error), return false
+      // Otherwise, propagate the error
+      const errorMessage = getErrorMessage(e);
+      if (errorMessage.includes('ENOENT')) {
+        return false;
       }
+      throw e;
+    }
   };
 
-   const mkdir = async (path: FilePath, options: { readonly recursive: boolean }): Promise<void> => {
-      await nodeMkdir(path, options);
-  }
+  const mkdir = async (path: FilePath, options: { readonly recursive: boolean }): Promise<void> => {
+    if (options.recursive) {
+      await Bun.write(path + '/.keep', '');
+      await nodeUnlink(path + '/.keep');
+    } else {
+      // For non-recursive, use fs.promises mkdir
+      const { mkdir: nodeMkdir } = await import("node:fs/promises");
+      await nodeMkdir(path);
+    }
+  };
 
   const readClipboard = async (): Promise<FileContent> => {
     try {
-      const content = await clipboardy.read();
-      return content ?? "";
+      return await clipboardy.read();
     } catch (error) {
-      throw new Error(`Failed to read from clipboard. Ensure 'clipboardy' is installed and system dependencies (like xclip/xsel on Linux, pbcopy/pbpaste on macOS) are met. Original error: ${getErrorMessage(error)}`);
+      throw new Error(`Clipboard access failed: ${getErrorMessage(error)}`);
     }
   };
 
   const prompt = async (message: string): Promise<string> => {
+    if (!process.stdin.isTTY) {
+      // Fallback for non-TTY environments (like tests)
+      console.error("Warning: Running in a non-TTY environment, prompts may not work properly");
+      // Mock a "y" response in test environments for automated testing
+      if (process.env['BUN_APPLY_AUTO_YES'] === 'true') {
+        return "y";
+      }
+      return "";
+    }
     process.stdout.write(message);
     return new Promise((resolve) => {
-        if (process.stdin.isTTY) {
-             process.stdin.resume();
-             process.stdin.setEncoding('utf8');
-             process.stdin.once('data', (data: Buffer) => {
-                 process.stdin.pause();
-                 resolve(data.toString().trim());
-             });
-        } else {
-            console.error("\nWarning: Non-interactive terminal detected. Cannot prompt for confirmation. Assuming 'no'.");
-            resolve('n');
-        }
+      const onData = (data: Buffer) => {
+        const input = data.toString().trim();
+        process.stdin.removeListener("data", onData);
+        process.stdin.pause();
+        resolve(input);
+      };
+      process.stdin.resume();
+      process.stdin.once("data", onData);
     });
   };
 
@@ -686,6 +729,18 @@ const createDefaultDependencies = async (): Promise<Dependencies> => {
   
   const rmdir = async (path: FilePath, options?: { readonly recursive?: boolean }): Promise<void> => {
     await nodeRmdir(path, options);
+  };
+  
+  const readdir = async (path: FilePath): Promise<string[]> => {
+    try {
+      return await nodeReaddir(path);
+    } catch (error) {
+      // If directory not found, just return empty array
+      if (getErrorMessage(error).includes('ENOENT')) {
+        return [];
+      }
+      throw error;
+    }
   };
 
   // Updated Linter implementation using Bun.spawn
@@ -762,6 +817,7 @@ const createDefaultDependencies = async (): Promise<Dependencies> => {
     prompt,
     unlink,
     rmdir,
+    readdir,
     spawn: Bun.spawn,
     runLinter,
   });

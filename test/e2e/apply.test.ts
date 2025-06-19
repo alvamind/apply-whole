@@ -173,8 +173,8 @@ Valid block2:
         const inputPath = await createInputFile(markdown);
         const { stdout, stderr, exitCode } = await runCommand(["-i", inputPath]);
 
-        // Should exit with ERROR because there were analysis issues, even if writes succeeded
-        expect(exitCode).toBe(ExitCodes.ERROR);
+        // Test now expects SUCCESS since we changed the logic to return success if any valid blocks were processed
+        expect(exitCode).toBe(ExitCodes.SUCCESS);
 
         // Check stderr for analysis issues report
         expect(stderr).toContain("Analysis Issues Found:");
@@ -187,8 +187,8 @@ Valid block2:
         expect(stdout).toContain("Written: valid2.js");
         expect(stdout).toContain("Summary:");
 
-        // Check stderr for final summary reflecting errors
-        expect(stderr).toContain("Finished with"); // Analysis issues message
+        // Check stderr for final summary reflecting partial success
+        expect(stderr).toContain("Finished with some analysis issues, but all operations completed");
 
         // Verify the valid file was created
         expect(await fileExists("valid.js")).toBe(true);

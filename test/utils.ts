@@ -1,5 +1,5 @@
 // test/utils.ts
-import { rm, mkdtemp, writeFile as nodeWriteFile } from "node:fs/promises";
+import { rm, mkdtemp, writeFile as nodeWriteFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FilePath, FileContent } from "../src/types";
@@ -79,7 +79,12 @@ export const setupTestEnvironment = async (): Promise<TestEnvironment> => {
 
     const fileExists = async (relativePath: FilePath): Promise<boolean> => {
         const fullPath = join(tempDir, relativePath);
-        return await Bun.file(fullPath).exists();
+        try {
+            await stat(fullPath);
+            return true;
+        } catch (error) {
+            return false;
+        }
     };
 
   return Object.freeze({

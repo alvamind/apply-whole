@@ -94,6 +94,7 @@ interface FileSystemDeps {
   readonly dirname: (path: FilePath) => FilePath;
   readonly unlink: (path: FilePath) => Promise<void>;
   readonly rmdir: (path: FilePath, options?: { readonly recursive: boolean }) => Promise<void>;
+  readonly readdir: (path: FilePath) => Promise<string[]>;
 }
 
 interface ClipboardDeps {
@@ -130,6 +131,6 @@ export type FormatDeps = Pick<Dependencies, "chalk">;
 export type DirectoryDeps = Pick<Dependencies, "exists" | "mkdir" | "dirname">;
 export type WriteFileDeps = Pick<Dependencies, "writeFile" | "readFile"> & DirectoryDeps;
 export type WriteProcessDeps = WriteFileDeps & Pick<Dependencies, "hrtime" | "exists" | "error" | "chalk">; // Added error/chalk for status
-export type RevertDeps = Pick<Dependencies, "writeFile" | "unlink" | "log" | "error" | "chalk" | "dirname" | "rmdir"> & ErrorExitDeps; // Added error/chalk for status
+export type RevertDeps = Pick<Dependencies, "writeFile" | "unlink" | "log" | "error" | "chalk" | "dirname" | "rmdir" | "readdir" | "exists"> & ErrorExitDeps; // Added exists
 export type LintingDeps = Pick<Dependencies, "runLinter" | "error" | "chalk">;
 export type RunApplyDeps = Dependencies & LintingDeps;
